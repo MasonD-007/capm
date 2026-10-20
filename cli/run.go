@@ -5,12 +5,13 @@ import (
 	"io"
 )
 
-const usage = `apm: share AI agents and run them in a sandbox
+const usage = `capm: share AI agents and run them in a sandbox
 
 Usage:
-  apm <command> [args]
+  capm <command> [args]
 
 Commands:
+  login     Authenticate with a registry
   push      Package and publish an agent to a registry
   pull      Fetch an agent and verify its signature
   inspect   Show the enforced permission summary
@@ -24,11 +25,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 	switch args[0] {
-	case "push", "pull", "inspect", "run":
-		fmt.Fprintf(stderr, "apm %s: not implemented yet\n", args[0])
+	case "inspect":
+		return inspect(args[1:], stdout, stderr)
+	case "login", "push", "pull", "run":
+		fmt.Fprintf(stderr, "capm %s: not implemented yet\n", args[0])
 		return 1
 	default:
-		fmt.Fprintf(stderr, "apm: unknown command %q\n\n%s", args[0], usage)
+		fmt.Fprintf(stderr, "capm: unknown command %q\n\n%s", args[0], usage)
 		return 2
 	}
 }

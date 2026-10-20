@@ -64,6 +64,8 @@ func (m *Manifest) Validate() error {
 		u, err := url.Parse(c.URL)
 		if err != nil || u.Scheme != "https" || u.Host == "" {
 			add("mcp[%d].url %q must be an https URL", i, c.URL)
+		} else if u.User != nil {
+			add("mcp[%d].url must not contain userinfo (manifests hold secret names only)", i)
 		}
 		if c.Secret != "" && !declared[c.Secret] {
 			add("mcp[%d].secret %q is not declared in secrets", i, c.Secret)

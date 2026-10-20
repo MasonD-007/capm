@@ -58,6 +58,7 @@ func TestValidate(t *testing.T) {
 		{"mount bad mode", func(m *Manifest) { m.Permissions.Mounts[0].Mode = "rw" }, "mode"},
 		{"mount read-write ok", func(m *Manifest) { m.Permissions.Mounts[0].Mode = "read-write" }, ""},
 		{"mcp http", func(m *Manifest) { m.MCP[0].URL = "http://x.com/mcp" }, "mcp"},
+		{"mcp userinfo", func(m *Manifest) { m.MCP[0].URL = "https://user:pw@mcp.example.com/mcp" }, "userinfo"},
 		{"mcp undeclared secret", func(m *Manifest) { m.MCP[0].Secret = "NOPE" }, "mcp"},
 		{"mcp no secret ok", func(m *Manifest) { m.MCP[0].Secret = "" }, ""},
 		{"secret lowercase", func(m *Manifest) { m.Secrets[0].Name = "token" }, "secrets"},

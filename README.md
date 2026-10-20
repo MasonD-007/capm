@@ -1,0 +1,141 @@
+# apm
+
+**Share AI agents the way you share packages. Run them in a sandbox that enforces exactly what they declare.**
+
+> **Status: early design.** Nothing here is implemented yet. This README describes the intended design and the v0 manifest spec. Expect breaking changes.
+
+## The problem
+
+People are building personal agents to help with their work, and coworkers often hit the same problems those agents solve. But there's no good way to hand an agent to someone else. Configs live in dotfiles, secrets live in `.env` files, the agent assumes a specific model provider, and the person receiving it has no idea what it can touch on their machine.
+
+Existing tools mostly distribute agent *configuration* (prompts, skills, MCP wiring). They don't make an agent's behavior verifiable, and they don't contain it.
+
+## The idea
+
+Every agent published to apm ships with a **manifest** that declares what it needs and what it's allowed to do. When you install and run an agent, apm translates that manifest into sandbox policy, so the runtime enforces the declaration instead of trusting it.
+
+Think of it as Android-style permissions for agents:
+
+- **Declared:** "this agent reaches `api.github.com`, reads `./workspace`, and needs `GITHUB_TOKEN`."
+- **Enforced:** the agent runs in an isolated microVM where everything else is blocked.
+- **Inspectable:** before you install, you see a plain summary of those permissions.
+
+- Goal, role, inputs, deliverables, safeguards
+
+## Design principles
+
+1. **Local first.** Agents are downloaded and run on the installer's machine. Hosted runtimes (e.g. Kata Containers on Kubernetes) may come later, driven by the same manifest.
+2. **The installer pays.** The person running the agent brings their own API key or points it at a free/local model. Agents talk to an OpenAI-compatible endpoint injected at run time, so no agent is locked to one provider.
+3. **No secrets in packages.** Manifests list secret *names* only. Values are injected at run time from the sandbox secret store.
+4. **Runtime agnostic spec.** The manifest never contains runtime-specific fields. Each runtime (sbx today, others later) is a translator from the same spec.
+5. **Enforced vs. described.** apm keeps a hard line between what the runtime guarantees and what the author claims (see [Summaries](#summaries)).
+
+## How it works
+
+```
+ author                         registry                     installer
+ ──────                         ────────                     ─────────
+ agent image + manifest  ──▶  OCI artifact (signed)  ──▶  inspect permissions
+                                                           │
+                                                           ▼
+                                                     manifest → sandbox policy
+                                                     secrets injected at run time
+                                                     model endpoint injected
+                                                           │
+                                                           ▼
+                                                     agent runs in microVM
+```
+
+- **Packaging:** agents are stored as OCI artifacts, so any OCI registry (Docker Hub, GHCR, a self-hosted registry) works. Versioning comes from tags and digests.
+- **Signing:** packages are signed (cosign) so installers can verify who published them.
+- **Runtime (v0):** [Docker Sandboxes](https://docs.docker.com/ai/sandboxes/) (`sbx`). Each agent gets its own microVM with its own kernel, filesystem, and Docker daemon. The manifest's egress list becomes sbx network policy, and required secrets are pulled from the sbx secret store.
+
+## Manifest (v0 draft)
+
+Custom agents are the general case. Coding agents (Claude Code, Codex, etc.) are just a preset base image.
+
+```yaml
+apiVersion: apm/v0
+kind: Agent
+metadata:
+  name: pr-reviewer
+  version: 0.1.0
+  description: Reviews open pull requests and leaves comments.
+  authors: [MasonD-007]
+
+runtime:
+  image: ghcr.io/masond-007/pr-reviewer@sha256:...   # pinned by digest
+  entrypoint: ["/agent/run"]
+
+interface:
+  type: tty            # v0 supports tty only; http / mcp / a2a planned
+
+model:
+  api: openai-compatible   # base URL + key injected at run time
+  requires:
+    toolCalling: true
+    minContextTokens: 32000
+
+permissions:
+  egress:
+    - api.github.com
+  mounts:
+    - path: ./workspace
+      mode: read-only
+
+secrets:
+  - name: GITHUB_TOKEN
+    description: Token with repo read and PR comment scope
+```
+
+Field reference (planned):
+
+| Field | Purpose |
+|---|---|
+| `runtime.image` | Container image for the agent, pinned by digest |
+| `runtime.entrypoint` | Command the sandbox runs |
+| `interface.type` | How the installer talks to the agent |
+| `model` | What the agent needs from a model; the endpoint itself is supplied by the installer |
+| `permissions.egress` | The only domains the agent can reach |
+| `permissions.mounts` | Host paths exposed to the sandbox, and in what mode |
+| `secrets` | Names of secrets injected at run time; never values |
+
+## Planned CLI
+
+```
+apm push      Package and publish an agent to a registry
+apm pull      Fetch an agent and verify its signature
+apm inspect   Show the enforced permission summary before installing
+apm run       Translate the manifest to sandbox policy, inject secrets and model endpoint, launch
+```
+
+## Summaries
+
+apm shows two kinds of summary and never mixes them:
+
+- **Enforced summary:** generated deterministically from the manifest. Network access, mounts, and required secrets. This is a guarantee because the runtime enforces it.
+- **Described summary:** an LLM-generated description of what the agent does, based on its code and prompts. Useful, but it reflects what the author built and claims, and can be gamed. It is always labeled as unverified.
+
+## Security model and known limits
+
+- **The sandbox protects your host, not your keys from the agent.** Any secret you inject is readable by the agent's code. The egress allowlist is what stops a key from leaving: if an agent can only reach `api.anthropic.com`, it has nowhere to send your token. Review egress lists carefully.
+- **Signing proves authorship, not good intent.** A signed package tells you who published it, not that it's safe.
+- **Isolation strength depends on the runtime.** v0 relies on sbx microVM isolation and its network policy enforcement.
+
+## Roadmap
+
+- [ ] Finalize v0 manifest spec, validated against two very different agents (a coding agent config bundle and a custom Go agent)
+- [ ] `apm inspect`: manifest parsing and enforced summary
+- [ ] `apm push` / `apm pull` with OCI artifacts and signature verification
+- [ ] `apm run` on sbx: egress policy, secret injection, model endpoint injection
+- [ ] Additional interfaces (HTTP, MCP, A2A)
+- [ ] Kubernetes runtime via Kata Containers
+- [ ] Web UI for browsing agents and their permission summaries
+
+## Contributing
+
+The project is at the spec stage, so the most useful contributions right now are feedback on the manifest: agents you'd want to share that don't fit it. Open an issue.
+
+## License
+
+TBD

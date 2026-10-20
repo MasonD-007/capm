@@ -76,7 +76,7 @@ func (s Summary) Render() string {
 		}
 		b.WriteString("\n")
 	}
-	section("Network (sandbox may reach only these hosts, port 443)", len(s.Egress),
+	section("Network (bundle egress allowlist, port 443; the base agent's hosts and your model endpoint are separate, see below)", len(s.Egress),
 		func(i int) string { return s.Egress[i] })
 	section("Files (mounted from your machine)", len(s.Mounts),
 		func(i int) string { return fmt.Sprintf("%s (%s)", s.Mounts[i].Path, s.Mounts[i].Mode) })

@@ -10,12 +10,17 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"slices"
 	"strings"
 )
 
 // maxFileSize caps any single file in a bundle, in both directions.
 const maxFileSize = 8 << 20
+
+// Limits on a whole archive, enforced while reading.
+const (
+	maxEntries   = 1000
+	maxTotalSize = 64 << 20
+)
 
 // PackDir validates dir/capm.yaml and returns a .tar.gz containing capm.yaml
 // and exactly the declared context files.
@@ -111,6 +116,12 @@ func UnpackTo(tarball []byte, dest string) (*Manifest, error) {
 	tr := tar.NewReader(gz)
 
 	files := map[string][]byte{}
+	var (
+		m       *Manifest
+		allowed = map[string]bool{}
+		total   int64
+		count   int
+	)
 	for {
 		h, err := tr.Next()
 		if errors.Is(err, io.EOF) {
@@ -118,6 +129,9 @@ func UnpackTo(tarball []byte, dest string) (*Manifest, error) {
 		}
 		if err != nil {
 			return nil, fmt.Errorf("bundle: %w", err)
+		}
+		if count++; count > maxEntries {
+			return nil, fmt.Errorf("bundle: more than %d entries", maxEntries)
 		}
 		if h.Typeflag != tar.TypeReg {
 			return nil, fmt.Errorf("bundle: entry %q is not a regular file", h.Name)
@@ -128,35 +142,39 @@ func UnpackTo(tarball []byte, dest string) (*Manifest, error) {
 		if _, dup := files[h.Name]; dup {
 			return nil, fmt.Errorf("bundle: duplicate entry %q", h.Name)
 		}
-		data, err := io.ReadAll(io.LimitReader(tr, maxFileSize+1))
+		// Reject by header, before buffering any body.
+		if m == nil {
+			if h.Name != FileName {
+				return nil, fmt.Errorf("bundle: first entry must be %s, got %q", FileName, h.Name)
+			}
+		} else if !allowed[h.Name] {
+			return nil, fmt.Errorf("bundle: entry %q is not declared in context", h.Name)
+		}
+		if h.Size < 0 || h.Size > maxFileSize {
+			return nil, fmt.Errorf("bundle: entry %q too large", h.Name)
+		}
+		if total += h.Size; total > maxTotalSize {
+			return nil, fmt.Errorf("bundle: contents exceed %d bytes", maxTotalSize)
+		}
+		data, err := io.ReadAll(io.LimitReader(tr, h.Size))
 		if err != nil {
 			return nil, fmt.Errorf("bundle: %w", err)
 		}
-		if len(data) > maxFileSize {
-			return nil, fmt.Errorf("bundle: entry %q too large", h.Name)
-		}
 		files[h.Name] = data
-	}
-
-	raw, ok := files[FileName]
-	if !ok {
-		return nil, fmt.Errorf("bundle: missing %s", FileName)
-	}
-	m, err := Parse(raw)
-	if err != nil {
-		return nil, err
-	}
-	if err := m.Validate(); err != nil {
-		return nil, err
-	}
-	allowed := make([]string, 0, len(m.Context))
-	for _, c := range m.Context {
-		allowed = append(allowed, path.Clean(filepath.ToSlash(c)))
-	}
-	for name := range files {
-		if name != FileName && !slices.Contains(allowed, name) {
-			return nil, fmt.Errorf("bundle: entry %q is not declared in context", name)
+		if m == nil {
+			if m, err = Parse(data); err != nil {
+				return nil, err
+			}
+			if err := m.Validate(); err != nil {
+				return nil, err
+			}
+			for _, c := range m.Context {
+				allowed[path.Clean(filepath.ToSlash(c))] = true
+			}
 		}
+	}
+	if m == nil {
+		return nil, fmt.Errorf("bundle: missing %s", FileName)
 	}
 
 	for name, data := range files {

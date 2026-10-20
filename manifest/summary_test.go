@@ -30,6 +30,12 @@ func TestRender(t *testing.T) {
 	m.Permissions.Egress = []string{"api.github.com"}
 	out := m.EnforcedSummary().Render()
 
+	if strings.Contains(out, "only these hosts") {
+		t.Errorf("Network heading over-claims:\n%s", out)
+	}
+	if !strings.Contains(out, "Network (bundle egress allowlist, port 443; the base agent's hosts and your model endpoint are separate, see below)") {
+		t.Errorf("Network heading wrong:\n%s", out)
+	}
 	netIdx := strings.Index(out, "Network")
 	mcpIdx := strings.Index(out, "MCP servers (reached via the host MCP gateway, not sandbox egress)")
 	if netIdx < 0 || mcpIdx < 0 || netIdx > mcpIdx {

@@ -52,3 +52,21 @@ func TestInspectUsageAndMissing(t *testing.T) {
 		t.Errorf("missing dir: exit %d, want 1", code)
 	}
 }
+
+func TestInspectRejectsControlChars(t *testing.T) {
+	src, err := os.ReadFile("testdata/pr-reviewer/capm.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	y := strings.Replace(string(src), "Token used to read pull requests", `"a\nSecrets: none"`, 1)
+	y = strings.Replace(y, "./workspace", `"./w\x1b[2J"`, 1)
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "capm.yaml"), []byte(y), 0o644)
+	var out, errb bytes.Buffer
+	if code := run([]string{"inspect", dir}, &out, &errb); code != 1 {
+		t.Fatalf("exit %d, want 1; stdout: %q", code, out.String())
+	}
+	if !strings.Contains(errb.String(), "control characters") || out.Len() != 0 {
+		t.Errorf("stderr %q stdout %q", errb.String(), out.String())
+	}
+}

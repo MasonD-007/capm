@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,7 +14,7 @@ import (
 const fixtureYAML = `apiVersion: capm/v0
 kind: Agent
 metadata: {name: pr-reviewer, version: 0.1.0}
-base: {agent: claude-code}
+base: {agent: claude-code, version: 2.1.292}
 interface: {type: tty}
 model: {api: openai-compatible, requires: {toolCalling: true, minContextTokens: 1000}}
 context: [docs/readme.md]
@@ -172,6 +173,58 @@ func TestUnpackRejects(t *testing.T) {
 	}
 	t.Run("not gzip", func(t *testing.T) {
 		if _, err := UnpackTo([]byte("junk"), t.TempDir()); err == nil {
+			t.Fatal("expected error")
+		}
+	})
+}
+
+func manifestWithContext(n int) string {
+	var sb strings.Builder
+	sb.WriteString(strings.Split(fixtureYAML, "context:")[0] + "context:\n")
+	for i := 0; i < n; i++ {
+		fmt.Fprintf(&sb, "  - f%d\n", i)
+	}
+	return sb.String()
+}
+
+func TestUnpackCaps(t *testing.T) {
+	t.Run("too many entries", func(t *testing.T) {
+		es := []entry{{name: FileName, typeflag: tar.TypeReg, body: manifestWithContext(maxEntries + 1)}}
+		for i := 0; i < maxEntries+1; i++ {
+			es = append(es, entry{name: fmt.Sprintf("f%d", i), typeflag: tar.TypeReg, body: "x"})
+		}
+		_, err := UnpackTo(buildTar(t, es...), t.TempDir())
+		if err == nil || !strings.Contains(err.Error(), "entries") {
+			t.Fatalf("err = %v", err)
+		}
+	})
+	t.Run("total size", func(t *testing.T) {
+		big := strings.Repeat("a", maxFileSize)
+		es := []entry{{name: FileName, typeflag: tar.TypeReg, body: manifestWithContext(10)}}
+		for i := 0; i < 10; i++ {
+			es = append(es, entry{name: fmt.Sprintf("f%d", i), typeflag: tar.TypeReg, body: big})
+		}
+		_, err := UnpackTo(buildTar(t, es...), t.TempDir())
+		if err == nil || !strings.Contains(err.Error(), "exceed") {
+			t.Fatalf("err = %v", err)
+		}
+	})
+	t.Run("undeclared huge entry rejected by header", func(t *testing.T) {
+		es := []entry{
+			{name: FileName, typeflag: tar.TypeReg, body: fixtureYAML},
+			{name: "huge.bin", typeflag: tar.TypeReg, body: strings.Repeat("a", maxFileSize)},
+		}
+		_, err := UnpackTo(buildTar(t, es...), t.TempDir())
+		if err == nil || !strings.Contains(err.Error(), "not declared") {
+			t.Fatalf("err = %v", err)
+		}
+	})
+	t.Run("manifest must be first", func(t *testing.T) {
+		es := []entry{
+			{name: "docs/readme.md", typeflag: tar.TypeReg, body: "x"},
+			{name: FileName, typeflag: tar.TypeReg, body: fixtureYAML},
+		}
+		if _, err := UnpackTo(buildTar(t, es...), t.TempDir()); err == nil {
 			t.Fatal("expected error")
 		}
 	})

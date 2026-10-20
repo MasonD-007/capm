@@ -6,6 +6,8 @@ import (
 	"net/url"
 	"path/filepath"
 	"regexp"
+	"strings"
+	"unicode"
 )
 
 var (
@@ -25,6 +27,46 @@ var (
 func (m *Manifest) Validate() error {
 	var errs []error
 	add := func(format string, a ...any) { errs = append(errs, fmt.Errorf(format, a...)) }
+
+	// Everything the manifest author controls is shown to the installer, so
+	// control characters (newline, ESC, ...) are rejected everywhere.
+	noCtl := func(field, s string) {
+		if hasControl(s) {
+			add("%s must not contain control characters", field)
+		}
+	}
+	noCtl("metadata.name", m.Metadata.Name)
+	noCtl("metadata.version", m.Metadata.Version)
+	noCtl("metadata.description", m.Metadata.Description)
+	for i, a := range m.Metadata.Authors {
+		noCtl(fmt.Sprintf("metadata.authors[%d]", i), a)
+	}
+	noCtl("base.agent", m.Base.Agent)
+	noCtl("base.version", m.Base.Version)
+	if m.Base.Version == "" || strings.IndexFunc(m.Base.Version, unicode.IsSpace) >= 0 {
+		add("base.version must be non-empty and contain no whitespace")
+	}
+	noCtl("interface.type", m.Interface.Type)
+	noCtl("model.api", m.Model.API)
+	for i, h := range m.Permissions.Egress {
+		noCtl(fmt.Sprintf("permissions.egress[%d]", i), h)
+	}
+	for i, mt := range m.Permissions.Mounts {
+		noCtl(fmt.Sprintf("permissions.mounts[%d].path", i), mt.Path)
+		noCtl(fmt.Sprintf("permissions.mounts[%d].mode", i), mt.Mode)
+	}
+	for i, s := range m.Secrets {
+		noCtl(fmt.Sprintf("secrets[%d].name", i), s.Name)
+		noCtl(fmt.Sprintf("secrets[%d].description", i), s.Description)
+	}
+	for i, c := range m.MCP {
+		noCtl(fmt.Sprintf("mcp[%d].name", i), c.Name)
+		noCtl(fmt.Sprintf("mcp[%d].url", i), c.URL)
+		noCtl(fmt.Sprintf("mcp[%d].secret", i), c.Secret)
+	}
+	for i, p := range m.Context {
+		noCtl(fmt.Sprintf("context[%d]", i), p)
+	}
 
 	if !nameRe.MatchString(m.Metadata.Name) {
 		add("metadata.name %q must match %s", m.Metadata.Name, nameRe)
@@ -83,4 +125,8 @@ func (m *Manifest) Validate() error {
 // its root after cleaning.
 func localPath(p string) bool {
 	return p != "" && !filepath.IsAbs(p) && filepath.IsLocal(p)
+}
+
+func hasControl(s string) bool {
+	return strings.IndexFunc(s, func(r rune) bool { return r < 0x20 || r == 0x7f }) >= 0
 }

@@ -157,6 +157,7 @@ var anthropicInjectHosts = []string{"api.anthropic.com", "mcp-proxy.anthropic.co
 var (
 	tagRe     = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$`) // OCI tag grammar
 	safePath  = regexp.MustCompile(`^[A-Za-z0-9/._-]+$`)
+	mcpNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`) // same rule as manifest.Validate
 	modelIDRe = regexp.MustCompile(`^[A-Za-z0-9._:/@-]{1,200}$`)
 )
 
@@ -177,6 +178,19 @@ func Describe(m *manifest.Manifest, o Options) (Info, error) {
 	// Ruling: base.version maps straight to the kit tag; sbx rejects unknown tags.
 	if !tagRe.MatchString(m.Base.Version) {
 		return info, fmt.Errorf("base.version %q is not a valid kit tag", m.Base.Version)
+	}
+	// Re-checked here (manifest.Validate does too) because MCP names reach
+	// comma-split --static-mcp and colon-separated mcp:<server>:<key> args:
+	// a name like "x,notion" would attach the user's own MCP server.
+	seen := map[string]bool{}
+	for _, c := range m.MCP {
+		if !mcpNameRe.MatchString(c.Name) {
+			return info, fmt.Errorf("MCP server name %q must match %s", c.Name, mcpNameRe)
+		}
+		if seen[c.Name] {
+			return info, fmt.Errorf("duplicate MCP server name %q", c.Name)
+		}
+		seen[c.Name] = true
 	}
 	sum := m.EnforcedSummary()
 	info.KitRef = ag.kitRepo + ":" + m.Base.Version

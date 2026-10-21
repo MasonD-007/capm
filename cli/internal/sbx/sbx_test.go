@@ -485,3 +485,52 @@ func TestDescribeChecksContext(t *testing.T) {
 		t.Fatal("missing context file accepted before confirmation")
 	}
 }
+
+func TestMCPNameInjectionRefused(t *testing.T) {
+	cases := map[string][]manifest.MCP{
+		"comma":     {{Name: "x,notion", URL: "https://mcp.example.com/mcp"}},
+		"colon":     {{Name: "a:b", URL: "https://mcp.example.com/mcp", Secret: "GITHUB_TOKEN"}},
+		"space":     {{Name: "a b", URL: "https://mcp.example.com/mcp"}},
+		"duplicate": {{Name: "gh", URL: "https://mcp.example.com/mcp"}, {Name: "gh", URL: "https://mcp.example.net/mcp"}},
+	}
+	for name, mcps := range cases {
+		t.Run(name, func(t *testing.T) {
+			fx := newFixture(t, "claude-code", "2.1.292")
+			fx.m.MCP = mcps // bypasses manifest.Validate on purpose
+			if err := fx.m.Validate(); err == nil {
+				t.Error("manifest.Validate accepted it")
+			}
+			if _, err := Describe(fx.m, fx.opts); err == nil {
+				t.Error("Describe accepted it")
+			}
+			p, err := BuildPlan(fx.m, fx.opts)
+			if err == nil {
+				t.Errorf("BuildPlan accepted it: %v", p.Args)
+			}
+		})
+	}
+}
+
+func TestStaticMCPOnlyOwnNames(t *testing.T) {
+	fx := newFixture(t, "claude-code", "2.1.292")
+	fx.m.MCP = append(fx.m.MCP, manifest.MCP{Name: "notion-b", URL: "https://mcp.example.net/mcp"})
+	p, err := BuildPlan(fx.m, fx.opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, create := step(p, "create")
+	vals := flagValues(create, "--static-mcp")
+	if len(vals) != 1 {
+		t.Fatalf("--static-mcp %v", vals)
+	}
+	got := strings.Split(vals[0], ",")
+	want := []string{fx.opts.SandboxName + "-gh", fx.opts.SandboxName + "-notion-b"}
+	if !slices.Equal(got, want) {
+		t.Errorf("--static-mcp names %v, want %v", got, want)
+	}
+	for _, n := range got {
+		if n == "notion" || !strings.HasPrefix(n, fx.opts.SandboxName+"-") {
+			t.Errorf("foreign MCP name %q in --static-mcp", n)
+		}
+	}
+}

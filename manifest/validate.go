@@ -108,7 +108,17 @@ func (m *Manifest) Validate() error {
 		}
 		declared[s.Name] = true
 	}
+	mcpNames := map[string]bool{}
 	for i, c := range m.MCP {
+		// MCP names become sbx registry names and are joined into
+		// comma-separated --static-mcp lists and mcp:<server>:<key> secret
+		// names, so only plain lowercase labels are allowed.
+		if !nameRe.MatchString(c.Name) {
+			add("mcp[%d].name %q must match %s", i, c.Name, nameRe)
+		} else if mcpNames[c.Name] {
+			add("mcp[%d].name %q is a duplicate", i, c.Name)
+		}
+		mcpNames[c.Name] = true
 		u, err := url.Parse(c.URL)
 		if err != nil || u.Scheme != "https" || u.Host == "" {
 			add("mcp[%d].url %q must be an https URL", i, c.URL)

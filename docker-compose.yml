@@ -5,7 +5,15 @@ services:
       dockerfile: backend/Dockerfile
     ports:
       - "8080:8080"
+    # backend/.env (copy backend/.env.example) supplies GITHUB_CLIENT_ID and
+    # the optional settings at run time; it is never copied into the image
+    # (Dockerfile.dockerignore excludes **/.env). Without GITHUB_CLIENT_ID,
+    # /v1/auth/* returns 503 and nobody can log in.
+    env_file:
+      - path: backend/.env
+        required: false
     environment:
+      # These two always win over backend/.env inside the container.
       PORT: "8080"
       DATA_DIR: /data
     volumes:

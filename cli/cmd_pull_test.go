@@ -302,3 +302,34 @@ func TestExactPinMustMatchResolved(t *testing.T) {
 		t.Errorf("cwd not clean: %v", ents)
 	}
 }
+
+func TestHostileDigestSanitized(t *testing.T) {
+	h := newHarness(t)
+	chdirTemp(t)
+	h.reg.add("bob", "agent", "1.0.0", testBundleTar(t, "agent", "1.0.0"), false)
+	h.reg.digest = "sha256:" + escape
+	for _, args := range [][]string{{"pull", "bob/agent"}, {"inspect", "bob/agent"}} {
+		if code := h.run(args...); code != 1 {
+			t.Fatalf("%v: exit %d, want 1", args, code)
+		}
+		assertClean(t, h)
+		if !strings.Contains(h.errb.String(), "does not match its digest sha256:[2JFAKE") {
+			t.Errorf("sanitized text missing: %q", h.errb.String())
+		}
+	}
+	if ents, _ := os.ReadDir("."); len(ents) != 0 {
+		t.Errorf("cwd not clean: %v", ents)
+	}
+}
+
+func TestHostileLoginSanitized(t *testing.T) {
+	h := newHarness(t)
+	h.reg.meLogin = escape
+	if code := h.run("login"); code != 1 {
+		t.Fatalf("exit %d", code)
+	}
+	assertClean(t, h)
+	if _, err := os.Stat(filepath.Join(h.env.credDir, "credentials.json")); err == nil {
+		t.Error("credentials saved for invalid login")
+	}
+}

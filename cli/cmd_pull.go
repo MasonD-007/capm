@@ -35,7 +35,7 @@ func fetch(c *client.Client, owner, name, spec string) ([]byte, client.Resolved,
 	if want, ok := strings.CutPrefix(res.Digest, "sha256:"); ok {
 		sum := sha256.Sum256(b)
 		if hex.EncodeToString(sum[:]) != want {
-			return nil, res, fmt.Errorf("downloaded bundle does not match its digest %s", res.Digest)
+			return nil, res, fmt.Errorf("downloaded bundle does not match its digest %s", client.Sanitize(res.Digest))
 		}
 	}
 	return b, res, nil

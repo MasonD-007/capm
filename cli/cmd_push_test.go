@@ -38,6 +38,7 @@ type fakeRegistry struct {
 	pushMsg  string
 
 	userCode, verifyURI string // override device-flow fields
+	digest, meLogin     string
 	forceVersion        string // override the version resolve reports
 
 	polls int // number of /auth/token calls
@@ -71,7 +72,11 @@ func newFakeRegistry(t *testing.T) *fakeRegistry {
 			io.WriteString(w, `{"error":"authentication required"}`)
 			return
 		}
-		io.WriteString(w, `{"id":7,"login":"alice"}`)
+		l := "alice"
+		if f.meLogin != "" {
+			l = f.meLogin
+		}
+		json.NewEncoder(w).Encode(map[string]any{"id": 7, "login": l})
 	})
 	mux.HandleFunc("PUT /v1/bundles/{owner}/{name}/{version}", func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
@@ -112,7 +117,7 @@ func newFakeRegistry(t *testing.T) *fakeRegistry {
 			return
 		}
 		fv := f.versions[o+"/"+n+"@"+pick]
-		out := map[string]any{"version": pick, "digest": "", "yanked": fv.yanked}
+		out := map[string]any{"version": pick, "digest": f.digest, "yanked": fv.yanked}
 		if fv.yanked {
 			out["warning"] = "yanked"
 		}

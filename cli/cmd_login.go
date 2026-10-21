@@ -32,6 +32,10 @@ func login(args []string, stdout, stderr io.Writer, e env) int {
 		fmt.Fprintf(stderr, "capm login: %v\n", err)
 		return 1
 	}
+	if !segRe.MatchString(id.Login) {
+		fmt.Fprintf(stderr, "capm login: registry returned an invalid login %q\n", client.Sanitize(id.Login))
+		return 1
+	}
 	if err := saveCreds(e, credentials{Registry: e.registry, Login: id.Login, Token: tok}); err != nil {
 		fmt.Fprintf(stderr, "capm login: saving credentials: %v\n", err)
 		return 1

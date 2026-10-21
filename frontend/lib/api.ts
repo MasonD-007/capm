@@ -6,6 +6,9 @@ export type Mount = { path: string; mode: string };
 export type Secret = { name: string; description?: string };
 export type MCPEntry = { name: string; url: string; host: string; secret?: string };
 
+/** A shared caveat from manifest/notices.go; render `text` verbatim. */
+export type Notice = { section: "network" | "baseAgent" | "context" | string; text: string };
+
 // Mirrors manifest.Summary (manifest/summary.go).
 export type Summary = {
   egress: string[];
@@ -15,7 +18,16 @@ export type Summary = {
   base: { agent: string; version?: string };
   model: unknown;
   context: string[];
+  /** The base agent kit's own egress; empty with baseHostsBroad when not enumerated. */
+  baseHosts?: string[];
+  baseHostsBroad?: boolean;
+  notices?: Notice[];
 };
+
+/** Texts of the summary's notices for one section, in server order. */
+export function noticeTexts(s: Summary, section: string): string[] {
+  return (s.notices ?? []).filter((n) => n?.section === section).map((n) => n.text);
+}
 
 export type BundleListItem = {
   ownerId: number;
@@ -82,7 +94,17 @@ export function listBundles(): Promise<BundleListItem[]> {
   return get<BundleListItem[]>("/v1/bundles");
 }
 
-export function getBundle(owner: string, name: string): Promise<BundleVersion[]> {
+const SEGMENT = /^[A-Za-z0-9._-]+$/;
+
+/** Owner/name must be plain path segments: `.`/`..` would collapse onto other API routes. */
+function validSegment(s: string): boolean {
+  return SEGMENT.test(s) && s !== "." && s !== "..";
+}
+
+export async function getBundle(owner: string, name: string): Promise<BundleVersion[]> {
+  if (!validSegment(owner) || !validSegment(name)) {
+    throw new ApiError(404, "bundle not found");
+  }
   return get<BundleVersion[]>(
     `/v1/bundles/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`,
   );

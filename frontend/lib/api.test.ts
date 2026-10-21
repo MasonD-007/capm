@@ -31,11 +31,29 @@ describe("listBundles", () => {
 });
 
 describe("getBundle", () => {
-  it("returns versions and url-encodes path segments", async () => {
+  it("returns versions for a well-formed owner/name", async () => {
     const f = mockFetch(200, [{ version: "1.0.0", yanked: false }]);
-    const out = await getBundle("al ice", "x");
+    const out = await getBundle("Al-ice_1", "x.y");
     expect(out[0].version).toBe("1.0.0");
-    expect((f.mock.calls[0] as unknown as [string])[0]).toContain("/v1/bundles/al%20ice/x");
+    expect((f.mock.calls[0] as unknown as [string])[0]).toContain("/v1/bundles/Al-ice_1/x.y");
+  });
+
+  it.each([
+    [".", "x"],
+    ["..", "x"],
+    ["a", ".."],
+    ["a", "."],
+    ["al ice", "x"],
+    ["a/b", "x"],
+    ["a", "x%2f"],
+    ["", "x"],
+    ["~1", "x"],
+  ])("rejects owner %j name %j as not found without fetching", async (owner, name) => {
+    const f = mockFetch(200, []);
+    const err = await getBundle(owner, name).catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.notFound).toBe(true);
+    expect(f).not.toHaveBeenCalled();
   });
 
   it("maps 404 to a distinct not-found error", async () => {

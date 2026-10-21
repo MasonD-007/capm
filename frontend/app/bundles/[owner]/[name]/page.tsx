@@ -1,8 +1,9 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
-import { ApiError, getBundle, latestNonYanked } from "@/lib/api";
+import { ApiError, getBundle, latestNonYanked, noticeTexts } from "@/lib/api";
 import type { BundleVersion } from "@/lib/api";
+import { cliCommands } from "@/lib/commands";
 import { clean } from "@/lib/text";
 
 type Props = {
@@ -48,15 +49,27 @@ async function Detail({ params, searchParams }: Props) {
 
   const id = `${clean(owner)}/${clean(name)}`;
   const description = clean(selected.manifest?.metadata?.description);
+  const cmd = cliCommands(owner, name, selected.version);
   return (
     <>
       <h1 className="mt-4 font-mono text-3xl font-semibold tracking-tight">{id}</h1>
 
       <section className="mt-6">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">Run</h2>
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">
+          Inspect, then run (version {clean(selected.version)})
+        </h2>
         <pre className="mt-2 overflow-x-auto rounded bg-zinc-100 p-3 font-mono text-sm dark:bg-zinc-900">
-          <code>capm run {id}</code>
+          <code>
+            {cmd.inspect}
+            {"\n"}
+            {cmd.run}
+          </code>
         </pre>
+        <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
+          <code className="font-mono">capm run</code> needs your own model endpoint, and{" "}
+          <code className="font-mono">--allow-unenforced-egress</code> to accept the egress status
+          shown under Network below.
+        </p>
       </section>
 
       <section className="mt-8">
@@ -104,10 +117,11 @@ async function Detail({ params, searchParams }: Props) {
   );
 }
 
-function Block({ title, items }: { title: string; items: string[] }) {
+function Block({ title, items, notes = [] }: { title: string; items: string[]; notes?: string[] }) {
   return (
     <div className="mt-5">
       <h3 className="font-medium">{title}</h3>
+      <Notes texts={notes} />
       {items.length === 0 ? (
         <p className="mt-1 pl-4 text-zinc-500">(none)</p>
       ) : (
@@ -123,10 +137,28 @@ function Block({ title, items }: { title: string; items: string[] }) {
   );
 }
 
-// Same sections and wording as manifest.Summary.Render() (manifest/summary.go).
-// Only the API's `summary` field is rendered here.
+function Notes({ texts }: { texts: string[] }) {
+  return (
+    <>
+      {texts.map((t, i) => (
+        <p
+          key={i}
+          role="note"
+          className="mt-1 ml-4 rounded border border-amber-400 px-2 py-1 text-sm text-amber-800 dark:text-amber-300"
+        >
+          {clean(t)}
+        </p>
+      ))}
+    </>
+  );
+}
+
+// Same sections as manifest.Summary.Render() (manifest/summary.go). Only the
+// API's `summary` field is rendered here, and every caveat comes from its
+// `notices` (manifest/notices.go); never hand-copy those texts here.
 function Permissions({ s }: { s: BundleVersion["summary"] }) {
   const base = clean(s.base?.agent) + (s.base?.version ? " " + clean(s.base.version) : "");
+  const baseHosts = (s.baseHosts ?? []).map(clean);
   return (
     <section className="mt-10">
       <h2 className="text-xl font-semibold">Declared permissions</h2>
@@ -136,7 +168,8 @@ function Permissions({ s }: { s: BundleVersion["summary"] }) {
       </p>
 
       <Block
-        title="Network (bundle egress allowlist, port 443; the base agent's hosts and your model endpoint are separate, see below)"
+        title="Network (declared bundle egress, port 443; the base agent's hosts and your model endpoint are listed separately below)"
+        notes={noticeTexts(s, "network")}
         items={s.egress.map(clean)}
       />
       <Block
@@ -158,13 +191,17 @@ function Permissions({ s }: { s: BundleVersion["summary"] }) {
         )}
       />
 
-      <div className="mt-5">
-        <h3 className="font-medium">Base agent</h3>
-        <p className="mt-1 pl-4 font-mono text-sm">{base}</p>
-        <p className="pl-4 text-zinc-500">
-          (the base agent&apos;s own network hosts are set by sbx and not listed here)
-        </p>
-      </div>
+      <Block
+        title={`Base agent: ${base} (its own sbx egress, in addition to the bundle's)`}
+        notes={noticeTexts(s, "baseAgent")}
+        items={
+          baseHosts.length > 0
+            ? baseHosts
+            : s.baseHostsBroad
+              ? ["(a broad list, not enumerated by capm)"]
+              : []
+        }
+      />
 
       <p className="mt-5">
         <span className="font-medium">Context files (read by the agent; not verified): </span>
@@ -172,6 +209,7 @@ function Permissions({ s }: { s: BundleVersion["summary"] }) {
           {s.context.length === 0 ? "(none)" : s.context.map(clean).join(", ")}
         </span>
       </p>
+      {s.context.length > 0 && <Notes texts={noticeTexts(s, "context")} />}
       <p className="mt-2 font-medium">
         Model endpoint: supplied by you (not part of the egress list)
       </p>

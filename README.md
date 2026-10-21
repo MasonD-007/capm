@@ -1,4 +1,4 @@
-# apm
+# capm
 
 **Share AI agents the way you share packages. Run them in a sandbox that enforces exactly what they declare.**
 
@@ -12,7 +12,7 @@ Existing tools mostly distribute agent *configuration* (prompts, skills, MCP wir
 
 ## The idea
 
-Every agent published to apm ships with a **manifest** that declares what it needs and what it's allowed to do. When you install and run an agent, apm translates that manifest into sandbox policy, so the runtime enforces the declaration instead of trusting it.
+Every agent published to capm ships with a **manifest** that declares what it needs and what it's allowed to do. When you install and run an agent, capm translates that manifest into sandbox policy, so the runtime enforces the declaration instead of trusting it.
 
 Think of it as Android-style permissions for agents:
 
@@ -28,7 +28,7 @@ Think of it as Android-style permissions for agents:
 2. **The installer pays.** The person running the agent brings their own API key or points it at a free/local model. Agents talk to an OpenAI-compatible endpoint injected at run time, so no agent is locked to one provider.
 3. **No secrets in packages.** Manifests list secret *names* only. Values are injected at run time from the sandbox secret store.
 4. **Runtime agnostic spec.** The manifest never contains runtime-specific fields. Each runtime (sbx today, others later) is a translator from the same spec.
-5. **Enforced vs. described.** apm keeps a hard line between what the runtime guarantees and what the author claims (see [Summaries](#summaries)).
+5. **Enforced vs. described.** capm keeps a hard line between what the runtime guarantees and what the author claims (see [Summaries](#summaries)).
 
 ## How it works
 
@@ -55,7 +55,7 @@ Think of it as Android-style permissions for agents:
 Custom agents are the general case. Coding agents (Claude Code, Codex, etc.) are just a preset base image.
 
 ```yaml
-apiVersion: apm/v0
+apiVersion: capm/v0
 kind: Agent
 metadata:
   name: pr-reviewer
@@ -103,15 +103,15 @@ Field reference (planned):
 ## Planned CLI
 
 ```
-apm push      Package and publish an agent to a registry
-apm pull      Fetch an agent and verify its signature
-apm inspect   Show the enforced permission summary before installing
-apm run       Translate the manifest to sandbox policy, inject secrets and model endpoint, launch
+capm push      Package and publish an agent to a registry
+capm pull      Fetch an agent and verify its signature
+capm inspect   Show the enforced permission summary before installing
+capm run       Translate the manifest to sandbox policy, inject secrets and model endpoint, launch
 ```
 
 ## Summaries
 
-apm shows two kinds of summary and never mixes them:
+capm shows two kinds of summary and never mixes them:
 
 - **Enforced summary:** generated deterministically from the manifest. Network access, mounts, and required secrets. This is a guarantee because the runtime enforces it.
 - **Described summary:** an LLM-generated description of what the agent does, based on its code and prompts. Useful, but it reflects what the author built and claims, and can be gamed. It is always labeled as unverified.
@@ -125,9 +125,9 @@ apm shows two kinds of summary and never mixes them:
 ## Roadmap
 
 - [ ] Finalize v0 manifest spec, validated against two very different agents (a coding agent config bundle and a custom Go agent)
-- [ ] `apm inspect`: manifest parsing and enforced summary
-- [ ] `apm push` / `apm pull` with OCI artifacts and signature verification
-- [ ] `apm run` on sbx: egress policy, secret injection, model endpoint injection
+- [ ] `capm inspect`: manifest parsing and enforced summary
+- [ ] `capm push` / `capm pull` with OCI artifacts and signature verification
+- [ ] `capm run` on sbx: egress policy, secret injection, model endpoint injection
 - [ ] Additional interfaces (HTTP, MCP, A2A)
 - [ ] Kubernetes runtime via Kata Containers
 - [ ] Web UI for browsing agents and their permission summaries

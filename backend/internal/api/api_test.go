@@ -104,6 +104,13 @@ func TestRoundTrip(t *testing.T) {
 	if !bytes.Contains(b, []byte(`"summary"`)) || !bytes.Contains(b, []byte(`"manifest"`)) {
 		t.Fatalf("missing fields: %s", b)
 	}
+	// The website renders these shared notices verbatim (C1/I1).
+	if got := vs[0].Summary.NoticeTexts(manifest.NoticeNetwork); len(got) != 1 || got[0] != manifest.EgressEnforcementNotice {
+		t.Fatalf("network notices %v", got)
+	}
+	if !bytes.Contains(b, []byte(`"baseHosts"`)) || !bytes.Contains(b, []byte(`"notices"`)) {
+		t.Fatalf("summary lacks baseHosts/notices: %s", b)
+	}
 	c, got := e.do(t, "GET", "/v1/bundles/alice/pr-reviewer/0.1.0/download", nil)
 	if c != 200 || !bytes.Equal(got, tb) {
 		t.Fatalf("download %d", c)

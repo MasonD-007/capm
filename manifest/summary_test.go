@@ -33,7 +33,7 @@ func TestRender(t *testing.T) {
 	if strings.Contains(out, "only these hosts") {
 		t.Errorf("Network heading over-claims:\n%s", out)
 	}
-	if !strings.Contains(out, "Network (bundle egress allowlist, port 443; the base agent's hosts and your model endpoint are separate, see below)") {
+	if !strings.Contains(out, "Network (declared bundle egress, port 443; the base agent's hosts and your model endpoint are listed separately below)") {
 		t.Errorf("Network heading wrong:\n%s", out)
 	}
 	netIdx := strings.Index(out, "Network")
@@ -92,5 +92,17 @@ func TestMCPEntryHostIsLowercaseHostname(t *testing.T) {
 	}
 	if h := m.EnforcedSummary().MCP[0].Host; h != "mcp.example.com" {
 		t.Fatalf("Host = %q, want mcp.example.com", h)
+	}
+}
+
+func TestRenderSanitizesUnvalidatedStrings(t *testing.T) {
+	m := validManifest() // deliberately not validated after mutation
+	m.Secrets[0].Description = "a\u202eb\x1b[2J\u0085c\u2028d"
+	m.Permissions.Egress = []string{"x\u009b.example.com"}
+	out := m.EnforcedSummary().Render()
+	for _, bad := range []string{"\u202e", "\x1b", "\u0085", "\u2028", "\u009b"} {
+		if strings.Contains(out, bad) {
+			t.Errorf("Render printed %q:\n%q", bad, out)
+		}
 	}
 }

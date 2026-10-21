@@ -46,24 +46,35 @@ func inspect(args []string, stdout, stderr io.Writer, e env) int {
 }
 
 func inspectRemote(owner, name, spec string, stdout, stderr io.Writer, e env) int {
-	tarball, res, err := fetch(client.New(e.registry, ""), owner, name, spec)
+	m, tmp, res, err := fetchToTemp(e, owner, name, spec, "", "capm-inspect-*")
+	if tmp != "" {
+		defer os.RemoveAll(tmp)
+	}
 	if err != nil {
 		fmt.Fprintf(stderr, "capm inspect: %v\n", err)
-		return 1
-	}
-	tmp, err := os.MkdirTemp("", "capm-inspect-*")
-	if err != nil {
-		fmt.Fprintf(stderr, "capm inspect: %v\n", err)
-		return 1
-	}
-	defer os.RemoveAll(tmp)
-	m, err := manifest.UnpackTo(tarball, tmp)
-	if err != nil {
-		fmt.Fprintf(stderr, "capm inspect: invalid bundle: %v\n", err)
 		return 1
 	}
 	fmt.Fprintf(stderr, "inspecting registry %s/%s@%s\n", owner, name, res.Version)
 	warnYanked(stderr, owner, name, res)
 	fmt.Fprint(stdout, m.EnforcedSummary().Render())
 	return 0
+}
+
+// fetchToTemp downloads owner/name@spec and unpacks it into a new directory
+// under root (os.TempDir() when ""). The caller removes the returned
+// directory whenever it is non-empty, including on error.
+func fetchToTemp(e env, owner, name, spec, root, pattern string) (*manifest.Manifest, string, client.Resolved, error) {
+	tarball, res, err := fetch(client.New(e.registry, ""), owner, name, spec)
+	if err != nil {
+		return nil, "", res, err
+	}
+	tmp, err := os.MkdirTemp(root, pattern)
+	if err != nil {
+		return nil, "", res, err
+	}
+	m, err := manifest.UnpackTo(tarball, tmp)
+	if err != nil {
+		return nil, tmp, res, fmt.Errorf("invalid bundle: %w", err)
+	}
+	return m, tmp, res, nil
 }

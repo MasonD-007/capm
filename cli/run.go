@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/MasonD-007/capm/cli/internal/sbx"
 )
 
 // env carries everything the networked commands need, so tests can inject it.
@@ -13,6 +16,15 @@ type env struct {
 	registry string              // registry base URL
 	credDir  string              // directory holding credentials.json
 	sleep    func(time.Duration) // used while polling for login
+
+	// capm run; nil fields get real defaults (see runDefaults).
+	ctx        context.Context
+	stdin      io.Reader
+	isTTY      func() bool
+	getenv     func(string) string
+	readSecret func(prompt string) (string, error) // no-echo prompt
+	runner     sbx.Runner
+	tempRoot   string // parent for temp dirs; "" means os.TempDir()
 }
 
 func defaultEnv() env {
@@ -36,7 +48,17 @@ Commands:
   push      Package and publish an agent to a registry
   pull      Fetch an agent and verify its signature
   inspect   Show the enforced permission summary
-  run       Launch an agent in a sandbox
+  run       Launch an agent in a Docker Sandbox (sbx)
+
+capm run [--yes] [--workdir DIR] [--model-url URL] [--model-key KEY] [--model NAME]
+         [--allow-unenforced-egress] <dir | user/name[@version]>
+  Shows the permission summary and run plan, asks to confirm (--yes skips),
+  then runs the agent with sbx. Mount paths are relative to --workdir
+  (default: the current directory). The model endpoint comes from --model-url
+  / --model-key / --model or CAPM_MODEL_URL / CAPM_MODEL_KEY / CAPM_MODEL.
+  Each declared secret NAME is read from CAPM_SECRET_<NAME>, else prompted
+  for without echo. capm cannot yet enforce exact-host egress, so run refuses
+  to start unless --allow-unenforced-egress is given.
 `
 
 // run executes the CLI with args (excluding the program name) and returns the exit code.
@@ -59,8 +81,7 @@ func runEnv(args []string, stdout, stderr io.Writer, e env) int {
 	case "pull":
 		return pull(args[1:], stdout, stderr, e)
 	case "run":
-		fmt.Fprintf(stderr, "capm %s: not implemented yet\n", args[0])
-		return 1
+		return runCmd(args[1:], stdout, stderr, e)
 	default:
 		fmt.Fprintf(stderr, "capm: unknown command %q\n\n%s", args[0], usage)
 		return 2

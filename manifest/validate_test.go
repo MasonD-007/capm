@@ -37,6 +37,10 @@ func TestValidate(t *testing.T) {
 		wantErr string // empty means valid
 	}{
 		{"valid", func(m *Manifest) {}, ""},
+		{"bad apiVersion", func(m *Manifest) { m.APIVersion = "capm/v1" }, "apiVersion"},
+		{"empty apiVersion", func(m *Manifest) { m.APIVersion = "" }, "apiVersion"},
+		{"bad kind", func(m *Manifest) { m.Kind = "Tool" }, "kind"},
+		{"empty kind", func(m *Manifest) { m.Kind = "" }, "kind"},
 		{"bad name uppercase", func(m *Manifest) { m.Metadata.Name = "Bad" }, "metadata.name"},
 		{"bad name leading dash", func(m *Manifest) { m.Metadata.Name = "-bad" }, "metadata.name"},
 		{"bad name too long", func(m *Manifest) { m.Metadata.Name = "a" + strings.Repeat("b", 64) }, "metadata.name"},

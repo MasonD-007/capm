@@ -1,10 +1,15 @@
 services:
   backend:
-    build: ./backend
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     ports:
       - "8080:8080"
     environment:
       PORT: "8080"
+      DATA_DIR: /data
+    volumes:
+      - backend-data:/data
 
   frontend:
     build:
@@ -15,3 +20,6 @@ services:
       - "3000:3000"
     depends_on:
       - backend
+
+volumes:
+  backend-data:

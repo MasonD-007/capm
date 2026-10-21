@@ -1,0 +1,9 @@
+.git
+frontend
+cli
+docs
+.superpowers
+**/.env
+**/bin
+**/*.test
+**/data

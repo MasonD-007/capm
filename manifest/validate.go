@@ -35,6 +35,12 @@ func (m *Manifest) Validate() error {
 			add("%s must not contain control characters", field)
 		}
 	}
+	if m.APIVersion != "capm/v0" {
+		add("apiVersion %q must be capm/v0", m.APIVersion)
+	}
+	if m.Kind != "Agent" {
+		add("kind %q must be Agent", m.Kind)
+	}
 	noCtl("metadata.name", m.Metadata.Name)
 	noCtl("metadata.version", m.Metadata.Version)
 	noCtl("metadata.description", m.Metadata.Description)

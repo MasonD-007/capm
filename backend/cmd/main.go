@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -15,6 +16,19 @@ import (
 	"github.com/MasonD-007/capm/backend/internal/store"
 	"github.com/joho/godotenv"
 )
+
+// envInt reads a positive integer env var, exiting on malformed values.
+func envInt(key string, def int) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 1 {
+		log.Fatalf("%s must be a positive integer, got %q", key, v)
+	}
+	return n
+}
 
 func main() {
 	if err := godotenv.Load(); err != nil && !os.IsNotExist(err) {
@@ -44,10 +58,17 @@ func main() {
 	if os.Getenv("GITHUB_CLIENT_ID") == "" {
 		log.Print("GITHUB_CLIENT_ID is unset: /v1/auth/* will return 503")
 	}
-	reg := api.New(st, authSvc.Authenticate)
+	reg := api.NewWithConfig(st, authSvc.Authenticate, api.Config{
+		MaxBundleBytes: int64(envInt("MAX_BUNDLE_BYTES", 5<<20)),
+		PublishPerHour: envInt("PUBLISH_RATE_PER_HOUR", 30),
+	})
+	// The unauthenticated auth routes proxy to GitHub, so limit them per IP.
+	// X-Forwarded-For is only honoured when TRUSTED_PROXY=true.
+	authLim := api.NewLimiter(envInt("AUTH_RATE_PER_MINUTE", 30), time.Minute, nil)
+	authH := api.LimitByIP(authLim, os.Getenv("TRUSTED_PROXY") == "true", authSvc.Handler())
 
 	mux := http.NewServeMux()
-	mux.Handle("/v1/auth/", authSvc.Handler())
+	mux.Handle("/v1/auth/", authH)
 	mux.Handle("/v1/", reg.Handler())
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		log.Println("Health check endpoint hit")

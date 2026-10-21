@@ -210,6 +210,26 @@ func (s *Store) Versions(ownerLogin, name string) ([]Version, error) {
 	return out, nil
 }
 
+// SetYanked marks or unmarks a version as yanked. Rows and blobs are never
+// deleted. It returns ErrNotFound if ownerID has no such version.
+func (s *Store) SetYanked(ownerID int64, name, version string, yanked bool) error {
+	v := 0
+	if yanked {
+		v = 1
+	}
+	res, err := s.db.Exec(`UPDATE versions SET yanked = ? WHERE owner_id = ? AND name = ? AND version = ?`,
+		v, ownerID, name, version)
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return err
+	} else if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (s *Store) Blob(ownerLogin, name, version string) ([]byte, error) {
 	var digest string
 	err := s.db.QueryRow(`SELECT v.digest FROM versions v JOIN users u ON u.id = v.owner_id

@@ -44,6 +44,22 @@ type Options struct {
 	ModelName    string // model id; required for opencode
 
 	Secrets map[string]string // declared secret NAME -> value
+
+	// Global sbx secrets on this machine (`sbx secret ls --global --quiet`,
+	// see ParseSecretList). GlobalSecretsChecked is false when that listing
+	// failed. A global anthropic secret is injected by the sbx proxy on
+	// requests to api.anthropic.com (findings Q4), which the base agent can
+	// reach, so capm refuses unless AllowGlobalAnthropicSecret is set.
+	GlobalSecrets              []string
+	GlobalSecretsChecked       bool
+	AllowGlobalAnthropicSecret bool
+}
+
+// SecretRoute says where the sbx proxy or MCP gateway delivers one secret.
+type SecretRoute struct {
+	Name  string   // declared secret NAME, or "model key"
+	Hosts []string // destination hosts
+	Via   string   // how it gets there
 }
 
 // File is a file the caller must write before running the plan (and remove
@@ -65,10 +81,11 @@ type Mount struct {
 type Info struct {
 	KitRef         string
 	Egress         []string // bundle egress; exactly EnforcedSummary().Egress
-	BaseAgentHosts []string // nil when the kit's list is not enumerated
+	BaseAgentHosts []string // manifest.BaseAgentHosts; empty when broad
+	BaseAgentBroad bool     // the kit's own list is broad and not enumerated
 	BaseAgentNote  string
 	ModelHost      string
-	SecretHosts    []string // hosts the sbx proxy injects bundle secrets into
+	SecretRoutes   []SecretRoute // per secret: destination hosts
 	Mounts         []Mount
 	ContextDest    string // in-sandbox path of the delivered context, "" if none
 	Enforced       bool
@@ -87,6 +104,10 @@ type Plan struct {
 	Args [][]string
 	// Stdin maps an index in Args to what is fed on that command's stdin.
 	Stdin map[int]string
+	// Verify maps an index in Args to a check of that command's stdout; such
+	// commands are run with Runner.Output and the run aborts if the check
+	// fails.
+	Verify map[int]func(stdout []byte) error
 	// Attach is the index of the interactive agent session.
 	Attach int
 	// Cleanup runs after the plan, whatever happened, best effort.
@@ -96,10 +117,12 @@ type Plan struct {
 	Files []File
 }
 
-// Runner executes a command. RunWithStdin feeds stdin (used for secrets).
+// Runner executes a command. RunWithStdin feeds stdin (used for secrets);
+// Output returns stdout (used for read-only queries and checks).
 type Runner interface {
 	Run(ctx context.Context, name string, args ...string) error
 	RunWithStdin(ctx context.Context, stdin io.Reader, name string, args ...string) error
+	Output(ctx context.Context, name string, args ...string) ([]byte, error)
 }
 
 // ExecRunner runs commands with os/exec, wired to the given streams.
@@ -118,12 +141,18 @@ func (r ExecRunner) RunWithStdin(ctx context.Context, stdin io.Reader, name stri
 	return cmd.Run()
 }
 
-// agentSpec is what capm knows about a base agent's sbx kit.
+func (r ExecRunner) Output(ctx context.Context, name string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Stderr = r.Stderr
+	return cmd.Output()
+}
+
+// agentSpec is what capm knows about a base agent's sbx kit. The kit's own
+// egress comes from manifest.BaseAgentHosts, the one shared table.
 type agentSpec struct {
 	kitRepo   string
 	ctxDir    string // findings Q6 targets; kit-spec agent-context-placement.md
 	ctxFile   string
-	hosts     []string
 	hostsNote string
 	keyEnv    string // env var the model key placeholder is bound to
 }
@@ -133,18 +162,16 @@ var agents = map[string]agentSpec{
 		// findings §6 / Q5: pinned v3 workload kit by OCI ref. V0.
 		kitRepo: "docker.io/docker/sbx-kit-claude",
 		ctxDir:  "/home/agent/.claude", ctxFile: "CLAUDE.md", // findings Q6. V7.
-		// findings §3: the built-in claude kit's own allow list (all :443). V5.
-		hosts: []string{"api.anthropic.com", "platform.claude.com", "downloads.claude.ai",
-			"claude.com", "mcp-proxy.anthropic.com", "bridge.claudeusercontent.com"},
-		hostsNote: "set by the sbx claude kit",
+		// findings §3: the claude kit's own allow list (all :443). V5.
+		hostsNote: "set by the sbx claude kit; unverified",
 		// findings Q4: Claude Code reads ANTHROPIC_API_KEY; placeholder via set-custom. V6.
 		keyEnv: "ANTHROPIC_API_KEY",
 	},
 	"opencode": {
 		kitRepo: "docker.io/docker/sbx-kit-opencode",                  // findings §6 / Q5. V0.
 		ctxDir:  "/home/agent/.config/opencode", ctxFile: "AGENTS.md", // findings Q6. V7.
-		// findings §3: "opencode adds a broad multi-provider list"; not enumerated there.
-		hostsNote: "a broad multi-provider list set by the sbx opencode kit; not enumerated by capm",
+		// findings §3: "opencode adds a broad multi-provider list"; not enumerated.
+		hostsNote: manifest.BroadBaseHostsNotice,
 		// capm's own name; opencode.json reads it via {env:...}. Unverified (findings §7).
 		keyEnv: "CAPM_MODEL_KEY",
 	},
@@ -195,12 +222,11 @@ func Describe(m *manifest.Manifest, o Options) (Info, error) {
 	sum := m.EnforcedSummary()
 	info.KitRef = ag.kitRepo + ":" + m.Base.Version
 	info.Egress = sum.Egress
-	info.BaseAgentHosts = ag.hosts
+	info.BaseAgentHosts, info.BaseAgentBroad = manifest.BaseAgentHosts(m.Base.Agent)
 	info.BaseAgentNote = ag.hostsNote
-	info.SecretHosts = sum.Egress
 
 	for _, h := range sum.Egress {
-		if slices.Contains(ag.hosts, h) {
+		if slices.Contains(info.BaseAgentHosts, h) {
 			info.Warnings = append(info.Warnings, fmt.Sprintf("bundle egress lists %s, which the base agent's kit already allows", h))
 		}
 	}
@@ -215,6 +241,34 @@ func Describe(m *manifest.Manifest, o Options) (Info, error) {
 	info.ModelHost = host
 	if m.Base.Agent == "opencode" && !modelIDRe.MatchString(o.ModelName) {
 		return info, errors.New("opencode needs a model name (--model or CAPM_MODEL)")
+	}
+
+	// I3 / findings Q4: a global `anthropic` secret is injected by the sbx
+	// proxy into requests to api.anthropic.com. The claude kit allows that
+	// host and opencode's broad list presumably does too, so the bundle
+	// could spend the installer's Anthropic credentials even when they
+	// supplied another model endpoint.
+	anthropicReachable := info.BaseAgentBroad || slices.Contains(info.BaseAgentHosts, "api.anthropic.com")
+	if anthropicReachable && !o.AllowGlobalAnthropicSecret {
+		if !o.GlobalSecretsChecked {
+			return info, errors.New("could not list global sbx secrets (`sbx secret ls --global`) to check for an `anthropic` secret the bundle could use via api.anthropic.com; " +
+				"fix sbx or pass --allow-global-anthropic-secret")
+		}
+		if hasAnthropic(o.GlobalSecrets) {
+			return info, errors.New("a global sbx `anthropic` secret is stored on this machine; sbx injects it into requests to api.anthropic.com, which this sandbox can reach, " +
+				"so the bundle could use your Anthropic credentials. Remove it (`sbx secret rm anthropic`) or pass --allow-global-anthropic-secret")
+		}
+	}
+	if o.GlobalSecretsChecked && len(o.GlobalSecrets) > 0 {
+		names := make([]string, len(o.GlobalSecrets))
+		for i, n := range o.GlobalSecrets {
+			names[i] = manifest.DisplaySafe(n)
+		}
+		info.Warnings = append(info.Warnings, fmt.Sprintf(
+			"global sbx secrets stored on this machine: %s; sbx may inject them into requests this sandbox makes to their services' hosts (egress is not enforced)",
+			strings.Join(names, ", ")))
+	} else if !o.GlobalSecretsChecked {
+		info.Warnings = append(info.Warnings, "could not list global sbx secrets; any stored there may be injected into requests this sandbox makes to their services' hosts")
 	}
 
 	if info.Mounts, err = resolveMounts(m.Permissions.Mounts, o.WorkDir); err != nil {
@@ -264,10 +318,23 @@ func Describe(m *manifest.Manifest, o Options) (Info, error) {
 	if o.ModelKey == "" {
 		info.Warnings = append(info.Warnings, "no model key given; requests to your model endpoint carry none")
 	}
-	if len(sum.Egress) == 0 {
-		for _, s := range m.Secrets {
-			info.Warnings = append(info.Warnings, fmt.Sprintf("secret %s is not bound to an environment variable: the bundle has no egress hosts for sbx to inject it into", s.Name))
+	// I4: where each secret goes. A secret named by an mcp[].secret travels
+	// only to that MCP server through the host gateway and is not bound to
+	// egress hosts; any other secret is bound to every bundle egress host.
+	mcpHosts := mcpSecretHosts(m)
+	if o.ModelKey != "" {
+		info.SecretRoutes = append(info.SecretRoutes, SecretRoute{Name: "model key", Hosts: []string{host}, Via: "sbx proxy, as " + ag.keyEnv})
+	}
+	for _, s := range m.Secrets {
+		if hs, ok := mcpHosts[s.Name]; ok {
+			info.SecretRoutes = append(info.SecretRoutes, SecretRoute{Name: s.Name, Hosts: hs, Via: "host MCP gateway only"})
+			continue
 		}
+		if len(sum.Egress) == 0 {
+			info.Warnings = append(info.Warnings, fmt.Sprintf("secret %s is not bound to an environment variable: the bundle has no egress hosts for sbx to inject it into", s.Name))
+			continue
+		}
+		info.SecretRoutes = append(info.SecretRoutes, SecretRoute{Name: s.Name, Hosts: sum.Egress, Via: "sbx proxy, as env " + s.Name})
 	}
 
 	// findings §2 / Q1 and kit-spec network-policy@2 "Composition": allow
@@ -300,7 +367,7 @@ func BuildPlan(m *manifest.Manifest, o Options) (Plan, error) {
 	if !regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,62}$`).MatchString(N) {
 		return Plan{}, fmt.Errorf("invalid sandbox name %q", N)
 	}
-	p := Plan{Info: info, SandboxName: N, Stdin: map[int]string{}, Env: map[string]string{}}
+	p := Plan{Info: info, SandboxName: N, Stdin: map[int]string{}, Env: map[string]string{}, Verify: map[int]func([]byte) error{}}
 	add := func(stdin string, args ...string) {
 		if stdin != "" {
 			p.Stdin[len(p.Args)] = stdin
@@ -353,19 +420,31 @@ func BuildPlan(m *manifest.Manifest, o Options) (Plan, error) {
 	}
 	// Ruling: each declared secret NAME is bound as env var NAME, injected by
 	// the proxy for the bundle's egress hosts (set-custom needs --host).
+	// MCP secrets are skipped (I4): they reach only their MCP server, via
+	// the gateway (step 3).
+	mcpHosts := mcpSecretHosts(m)
 	if len(info.Egress) > 0 {
 		for _, s := range m.Secrets {
-			customSecret(s.Name, o.Secrets[s.Name], info.Egress)
+			if _, mcpOnly := mcpHosts[s.Name]; !mcpOnly {
+				customSecret(s.Name, o.Secrets[s.Name], info.Egress)
+			}
 		}
 	}
 
 	// 3. MCP servers via the host gateway, not sandbox egress (findings §1,
 	//    Q7; sequence step 3). Global registry names, so namespaced by the
 	//    unique sandbox name (findings §5). V1, V8.
+	//    C2: `--url` also accepts registry and server.json URLs that resolve
+	//    to an image-backed stdio server running on the host. Per `sbx mcp
+	//    add --help` (v0.48), an add carrying --header "fails rather than
+	//    dropping them" when the URL resolves to stdio, so every add carries
+	//    a header; and `sbx mcp inspect --json` must then show a remote
+	//    endpoint at exactly the manifest URL, else the run aborts (and
+	//    cleanup removes the registration). Both unverified (V1).
 	var mcpNames []string
 	for _, c := range m.MCP {
 		srv := N + "-" + c.Name
-		args := []string{"mcp", "add", srv, "--url", c.URL, "--skip-auth"}
+		args := []string{"mcp", "add", srv, "--url", c.URL, "--skip-auth", "--header", "X-Capm-Bundle: " + N}
 		key := ""
 		if c.Secret != "" {
 			key = strings.ToLower(strings.ReplaceAll(c.Secret, "_", "-"))
@@ -373,6 +452,14 @@ func BuildPlan(m *manifest.Manifest, o Options) (Plan, error) {
 		}
 		add("", args...)
 		p.Cleanup = append(p.Cleanup, []string{"mcp", "rm", "--force", srv})
+		name, want := c.Name, c.URL
+		p.Verify[len(p.Args)] = func(out []byte) error {
+			if err := verifyRemoteMCP(out, want); err != nil {
+				return fmt.Errorf("MCP server %s: %w; aborting", name, err)
+			}
+			return nil
+		}
+		add("", "mcp", "inspect", srv, "--json")
 		if key != "" {
 			// `sbx secret set mcp:<server>:<placeholder>` reads stdin (mcp add --help).
 			add(o.Secrets[c.Secret], "secret", "set", "mcp:"+srv+":"+key)
@@ -410,7 +497,9 @@ func BuildPlan(m *manifest.Manifest, o Options) (Plan, error) {
 			create = append(create, mt.HostPath)
 		}
 	}
-	create = append(create, "--kit", mixinZip)
+	// I3: `sbx create --skills` defaults to readonly, which links the
+	// installer's host skills store into the sandbox (create --help, v0.48).
+	create = append(create, "--kit", mixinZip, "--skills", "off")
 	envKeys := make([]string, 0, len(p.Env))
 	for k := range p.Env {
 		envKeys = append(envKeys, k)
@@ -615,4 +704,122 @@ func opencodeConfig(api, baseURL, model, keyEnv string, haveKey bool) ([]byte, e
 		"model": "capm/" + model,
 	}
 	return jsonIndent(cfg)
+}
+
+// mcpSecretHosts maps each secret named by an mcp[].secret to the hosts of
+// the MCP servers that use it.
+func mcpSecretHosts(m *manifest.Manifest) map[string][]string {
+	out := map[string][]string{}
+	for _, c := range m.MCP {
+		if c.Secret == "" {
+			continue
+		}
+		h, _ := manifest.MCPHost(c.URL)
+		if !slices.Contains(out[c.Secret], h) {
+			out[c.Secret] = append(out[c.Secret], h)
+		}
+	}
+	return out
+}
+
+// ParseSecretList reads `sbx secret ls --quiet` output: one name per line.
+// The format is from the help text ("Only display secret names") and is
+// unverified.
+func ParseSecretList(out []byte) []string {
+	var names []string
+	for _, l := range strings.Split(string(out), "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			names = append(names, l)
+		}
+	}
+	return names
+}
+
+func hasAnthropic(names []string) bool {
+	for _, n := range names {
+		if f := strings.Fields(n); len(f) > 0 && strings.EqualFold(f[0], "anthropic") {
+			return true
+		}
+	}
+	return false
+}
+
+// verifyRemoteMCP checks `sbx mcp inspect NAME --json` output. Its schema is
+// undocumented (unverified, V1), so the check fails closed: the output must
+// be JSON; no field may describe a local/stdio server (command, args, image,
+// packages, local, ...; or a type/transport naming stdio, local, oci, docker,
+// image); and at least one url/endpoint field must exist, every one equal to
+// want exactly. Errors never echo sbx's raw output.
+func verifyRemoteMCP(out []byte, want string) error {
+	var v any
+	if err := json.Unmarshal(out, &v); err != nil {
+		return errors.New("could not read `sbx mcp inspect --json` output, so capm cannot confirm it is a remote server")
+	}
+	localKeys := map[string]bool{"command": true, "args": true, "image": true, "package": true, "packages": true,
+		"dir": true, "local": true, "docker": true, "oci": true, "registrytype": true, "stdio": true}
+	typeKeys := map[string]bool{"type": true, "transport": true, "transporttype": true, "kind": true, "servertype": true, "mode": true}
+	urlKeys := map[string]bool{"url": true, "endpoint": true, "remoteurl": true, "serverurl": true, "endpointurl": true}
+	var urls []string
+	local := false
+	var walk func(key string, v any)
+	walk = func(key string, v any) {
+		k := strings.ToLower(strings.NewReplacer("_", "", "-", "").Replace(key))
+		if localKeys[k] && !empty(v) {
+			local = true
+		}
+		if str, ok := v.(string); ok {
+			if typeKeys[k] {
+				t := strings.ToLower(str)
+				for _, bad := range []string{"stdio", "local", "oci", "docker", "image", "command"} {
+					if strings.Contains(t, bad) {
+						local = true
+					}
+				}
+			}
+			if urlKeys[k] {
+				urls = append(urls, str)
+			}
+		}
+		switch t := v.(type) {
+		case map[string]any:
+			for kk, vv := range t {
+				walk(kk, vv)
+			}
+		case []any:
+			for _, vv := range t {
+				walk(key, vv)
+			}
+		}
+	}
+	walk("", v)
+	if local {
+		return errors.New("sbx registered it as a local (non-remote) server")
+	}
+	if len(urls) == 0 {
+		return errors.New("`sbx mcp inspect` shows no endpoint URL, so capm cannot confirm it is the declared remote server")
+	}
+	for _, u := range urls {
+		if u != want {
+			return errors.New("sbx registered an endpoint other than the URL the manifest declares")
+		}
+	}
+	return nil
+}
+
+func empty(v any) bool {
+	switch t := v.(type) {
+	case nil:
+		return true
+	case string:
+		return t == ""
+	case bool:
+		return !t
+	case float64:
+		return t == 0
+	case []any:
+		return len(t) == 0
+	case map[string]any:
+		return len(t) == 0
+	}
+	return false
 }

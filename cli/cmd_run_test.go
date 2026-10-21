@@ -31,6 +31,13 @@ type fakeRunner struct {
 	failOn string              // first arg that makes Run fail
 	onCall func(args []string) // hook, e.g. to cancel the context
 	seen   []string            // temp files that existed during the run
+
+	// Output: read-only queries are recorded apart from calls, so "nothing
+	// was run" checks still count only state-changing invocations.
+	queries    [][]string
+	secretList string // stdout of `secret ls`
+	secretErr  error
+	inspectOut string // stdout of `mcp inspect`; "" means a good remote
 }
 
 func (f *fakeRunner) record(name, stdin string, args []string) error {
@@ -67,6 +74,29 @@ func (f *fakeRunner) RunWithStdin(ctx context.Context, stdin io.Reader, name str
 	}
 	b, _ := io.ReadAll(stdin)
 	return f.record(name, string(b), args)
+}
+
+func (f *fakeRunner) Output(ctx context.Context, name string, args ...string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	f.queries = append(f.queries, args)
+	f.mu.Unlock()
+	switch {
+	case len(args) >= 2 && args[0] == "secret" && args[1] == "ls":
+		return []byte(f.secretList), f.secretErr
+	case len(args) >= 2 && args[0] == "mcp" && args[1] == "inspect":
+		if f.inspectOut != "" {
+			return []byte(f.inspectOut), nil
+		}
+		// The fixture's MCP server, as a remote endpoint.
+		if err := f.record(name, "", args); err != nil {
+			return nil, err
+		}
+		return []byte(`{"name":"` + args[2] + `","type":"remote","url":"https://mcp.example.com/mcp"}`), nil
+	}
+	return nil, errors.New("unexpected query")
 }
 
 func (f *fakeRunner) count() int { f.mu.Lock(); defer f.mu.Unlock(); return len(f.calls) }
@@ -335,5 +365,100 @@ func TestRunUsageListed(t *testing.T) {
 	run([]string{"help"}, &out, &errb)
 	if !strings.Contains(out.String(), "--allow-unenforced-egress") {
 		t.Errorf("usage lacks run flags:\n%s", out.String())
+	}
+}
+
+// C2: a registration that sbx reports as non-remote, or at another URL,
+// aborts the run before create and still cleans up.
+func TestRunAbortsOnNonRemoteMCP(t *testing.T) {
+	for name, out := range map[string]string{
+		"stdio":     `{"type":"stdio","image":"docker.io/evil/mcp:1"}`,
+		"other url": `{"type":"remote","url":"https://evil.example.com/mcp"}`,
+		"garbage":   "\x1b[2Jnot json",
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newRunHarness(t, "", false)
+			h.runner.inspectOut = out
+			if code := h.runArgs("--yes", "--allow-unenforced-egress", fixtureDir); code != 1 {
+				t.Fatalf("exit %d; stderr %s", code, h.errb.String())
+			}
+			if h.runner.has("create") || h.runner.has("run", "--name") {
+				t.Errorf("kept going after a failed MCP check: %v", h.runner.calls)
+			}
+			if !h.runner.has("mcp", "rm") || !h.runner.has("secret", "rm") {
+				t.Errorf("cleanup not run: %v", h.runner.calls)
+			}
+			if !strings.Contains(h.errb.String(), "MCP server gh") || strings.Contains(h.errb.String(), "\x1b") {
+				t.Errorf("stderr %q", h.errb.String())
+			}
+			h.assertNoLeaks(t)
+		})
+	}
+}
+
+// C2: every mcp add the CLI executes carries a header.
+func TestRunEveryMCPAddHasHeader(t *testing.T) {
+	h := newRunHarness(t, "", false)
+	if code := h.runArgs("--yes", "--allow-unenforced-egress", fixtureDir); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.errb.String())
+	}
+	n := 0
+	for _, c := range h.runner.calls {
+		if len(c.args) > 1 && c.args[0] == "mcp" && c.args[1] == "add" {
+			n++
+			if !strings.Contains(strings.Join(c.args, " "), "--header X-Capm-Bundle: capm-pr-reviewer-") {
+				t.Errorf("mcp add without header: %v", c.args)
+			}
+		}
+	}
+	if n != 1 || !h.runner.has("mcp", "inspect") {
+		t.Errorf("adds %d, calls %v", n, h.runner.calls)
+	}
+}
+
+// I3: a global anthropic sbx secret blocks the run unless explicitly allowed.
+func TestRunGlobalAnthropicSecret(t *testing.T) {
+	h := newRunHarness(t, "", false)
+	h.runner.secretList = "anthropic\ngithub\n"
+	if code := h.runArgs("--yes", "--allow-unenforced-egress", fixtureDir); code != 1 {
+		t.Fatalf("exit %d", code)
+	}
+	if h.runner.count() != 0 || !strings.Contains(h.errb.String(), "--allow-global-anthropic-secret") {
+		t.Errorf("calls %d stderr %q", h.runner.count(), h.errb.String())
+	}
+	h.assertNoLeaks(t)
+
+	h = newRunHarness(t, "", false)
+	h.runner.secretList = "anthropic\n"
+	if code := h.runArgs("--yes", "--allow-unenforced-egress", "--allow-global-anthropic-secret", fixtureDir); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.errb.String())
+	}
+	if !strings.Contains(h.out.String(), "global sbx secrets stored on this machine: anthropic") {
+		t.Errorf("no warning line:\n%s", h.out.String())
+	}
+
+	h = newRunHarness(t, "", false)
+	h.runner.secretErr = errors.New("not signed in")
+	if code := h.runArgs("--yes", "--allow-unenforced-egress", fixtureDir); code != 1 || !strings.Contains(h.errb.String(), "could not list global sbx secrets") {
+		t.Errorf("unlistable secrets: exit %d stderr %q", code, h.errb.String())
+	}
+}
+
+// I4 + I3: the run screen lists per-secret destinations and the skills mode.
+func TestRunScreenSecretDestinations(t *testing.T) {
+	h := newRunHarness(t, "n\n", true)
+	h.runArgs("--allow-unenforced-egress", fixtureDir)
+	s := h.out.String()
+	for _, want := range []string{
+		"Secret GITHUB_TOKEN goes only to: mcp.example.com (host MCP gateway only)",
+		"Secret model key goes only to: models.example.com",
+		"--skills off",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("run screen lacks %q:\n%s", want, s)
+		}
+	}
+	if strings.Contains(s, "injected by the sbx proxy only on requests to: api.github.com") {
+		t.Errorf("old all-secrets line still printed:\n%s", s)
 	}
 }

@@ -58,7 +58,7 @@ func newFixture(t *testing.T, agent, version string) fixture {
 	rw, _ := filepath.EvalSymlinks(work)
 	return fixture{m: m, workdir: rw, opts: Options{
 		WorkDir: work, BundleDir: bundle, TempDir: tmp, SandboxName: "capm-pr-reviewer-abc123",
-		ModelBaseURL: modelURL, ModelKey: sentinelModel, ModelName: "qwen3-coder",
+		ModelBaseURL: modelURL, ModelKey: sentinelModel, ModelName: "qwen3-coder", GlobalSecretsChecked: true,
 		Secrets: map[string]string{"GITHUB_TOKEN": sentinelMCP, "API_TOKEN": sentinelSecret},
 	}}
 }
@@ -186,7 +186,7 @@ func TestBuildPlanPerAgent(t *testing.T) {
 			// MCP: registered through the gateway, never as egress.
 			_, add := step(p, "mcp", "add")
 			srv := N + "-gh"
-			wantAdd := []string{"mcp", "add", srv, "--url", "https://mcp.example.com/mcp", "--skip-auth", "--header", "Authorization: Bearer ${github-token}"}
+			wantAdd := []string{"mcp", "add", srv, "--url", "https://mcp.example.com/mcp", "--skip-auth", "--header", "X-Capm-Bundle: " + N, "--header", "Authorization: Bearer ${github-token}"}
 			if !slices.Equal(add, wantAdd) {
 				t.Errorf("mcp add %v, want %v", add, wantAdd)
 			}

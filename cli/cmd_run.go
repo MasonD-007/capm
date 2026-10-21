@@ -23,7 +23,7 @@ import (
 	"github.com/MasonD-007/capm/manifest"
 )
 
-const runUse = "usage: capm run [--yes] [--workdir DIR] [--model-url URL] [--model-key KEY] [--model NAME] [--allow-unenforced-egress] <dir | user/name[@version]>"
+const runUse = "usage: capm run [--yes] [--workdir DIR] [--model-url URL] [--model-key KEY] [--model NAME] [--allow-unenforced-egress] [--allow-global-anthropic-secret] <dir | user/name[@version]>"
 
 // runDefaults fills in the interactive pieces of e that tests may inject.
 func (e env) runDefaults(stdout, stderr io.Writer) env {
@@ -55,6 +55,7 @@ func (e env) runDefaults(stdout, stderr io.Writer) env {
 
 type runFlags struct {
 	yes, allowUnenforced        bool
+	allowGlobalAnthropic        bool
 	workdir, modelURL, modelKey string
 	modelName                   string
 	target                      string
@@ -68,6 +69,7 @@ func parseRunFlags(args []string, stderr io.Writer) (runFlags, error) {
 	fs.BoolVar(&f.yes, "yes", false, "")
 	fs.BoolVar(&f.yes, "y", false, "")
 	fs.BoolVar(&f.allowUnenforced, "allow-unenforced-egress", false, "")
+	fs.BoolVar(&f.allowGlobalAnthropic, "allow-global-anthropic-secret", false, "")
 	fs.StringVar(&f.workdir, "workdir", "", "")
 	fs.StringVar(&f.modelURL, "model-url", "", "")
 	fs.StringVar(&f.modelKey, "model-key", "", "")
@@ -178,7 +180,12 @@ func runCmd(args []string, stdout, stderr io.Writer, e env) int {
 
 	opts := sbx.Options{WorkDir: f.workdir, BundleDir: bundleDir, TempDir: tmpReal,
 		SandboxName:  sandboxName(m.Metadata.Name),
-		ModelBaseURL: modelURL, ModelKey: modelKey, ModelName: modelName}
+		ModelBaseURL: modelURL, ModelKey: modelKey, ModelName: modelName,
+		AllowGlobalAnthropicSecret: f.allowGlobalAnthropic}
+	// Read-only: which global sbx secrets could leak into this sandbox (I3).
+	if out, lerr := e.runner.Output(ctx, sbx.Bin, "secret", "ls", "--global", "--quiet"); lerr == nil {
+		opts.GlobalSecrets, opts.GlobalSecretsChecked = sbx.ParseSecretList(out), true
+	}
 	info, err := sbx.Describe(m, opts)
 	if err != nil {
 		return fail("%v", err)
@@ -241,7 +248,17 @@ func runCmd(args []string, stdout, stderr io.Writer, e env) int {
 			// The agent owns the terminal: Ctrl-C belongs to it, not to us.
 			c = context.WithoutCancel(ctx)
 		}
-		if in, ok := plan.Stdin[i]; ok {
+		if check, ok := plan.Verify[i]; ok {
+			var out []byte
+			if out, err = e.runner.Output(c, sbx.Bin, a...); err == nil {
+				if err = check(out); err != nil {
+					if ctx.Err() != nil {
+						break
+					}
+					return fail("%s", client.Sanitize(err.Error()))
+				}
+			}
+		} else if in, ok := plan.Stdin[i]; ok {
 			err = e.runner.RunWithStdin(c, strings.NewReader(in), sbx.Bin, a...)
 		} else {
 			err = e.runner.Run(c, sbx.Bin, a...)
@@ -261,37 +278,41 @@ func runCmd(args []string, stdout, stderr io.Writer, e env) int {
 
 func renderRunInfo(m *manifest.Manifest, info sbx.Info) string {
 	var b strings.Builder
+	d := manifest.DisplaySafe
 	b.WriteString("\nRun plan (Docker Sandboxes; not yet verified against a real sandbox)\n")
-	fmt.Fprintf(&b, "  Base agent kit: %s\n", info.KitRef)
+	fmt.Fprintf(&b, "  Base agent kit: %s\n", d(info.KitRef))
 	if len(info.BaseAgentHosts) > 0 {
 		fmt.Fprintf(&b, "  Base agent (sbx) egress: %s (%s)\n", strings.Join(info.BaseAgentHosts, ", "), info.BaseAgentNote)
 	} else {
 		fmt.Fprintf(&b, "  Base agent (sbx) egress: %s\n", info.BaseAgentNote)
 	}
 	fmt.Fprintf(&b, "  Model endpoint (supplied by you): %s:443, allowed for this sandbox only\n", client.Sanitize(info.ModelHost))
-	if len(m.Secrets) > 0 {
-		if len(info.SecretHosts) > 0 {
-			fmt.Fprintf(&b, "  Secrets are injected by the sbx proxy only on requests to: %s\n", strings.Join(info.SecretHosts, ", "))
+	for _, r := range info.SecretRoutes {
+		hosts := make([]string, len(r.Hosts))
+		for i, h := range r.Hosts {
+			hosts[i] = d(h)
 		}
+		fmt.Fprintf(&b, "  Secret %s goes only to: %s (%s)\n", d(r.Name), strings.Join(hosts, ", "), r.Via)
 	}
 	for _, mt := range info.Mounts {
 		mode := "read-write"
 		if mt.ReadOnly {
 			mode = "read-only"
 		}
-		fmt.Fprintf(&b, "  Mount: %s -> %s (%s)\n", mt.Path, client.Sanitize(mt.HostPath), mode)
+		fmt.Fprintf(&b, "  Mount: %s -> %s (%s)\n", d(mt.Path), client.Sanitize(mt.HostPath), mode)
 	}
 	if info.ContextDest != "" {
 		fmt.Fprintf(&b, "  Context files delivered to: %s (content not verified)\n", info.ContextDest)
 	}
 	if len(m.MCP) > 0 {
-		b.WriteString("  MCP servers are registered with the sbx MCP gateway on this machine for this run and removed afterwards\n")
+		b.WriteString("  MCP servers are registered with the sbx MCP gateway on this machine for this run, checked to be remote endpoints at the declared URL, and removed afterwards\n")
 	}
+	b.WriteString("  Host skills store: not linked into the sandbox (--skills off)\n")
 	fmt.Fprintf(&b, "  Egress enforcement: %s\n", info.EnforcementMsg)
 	if len(info.Warnings) > 0 {
 		b.WriteString("Warnings:\n")
 		for _, w := range info.Warnings {
-			fmt.Fprintf(&b, "  - %s\n", w)
+			fmt.Fprintf(&b, "  - %s\n", d(w))
 		}
 	}
 	return b.String()

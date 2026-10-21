@@ -51,14 +51,17 @@ Commands:
   run       Launch an agent in a Docker Sandbox (sbx)
 
 capm run [--yes] [--workdir DIR] [--model-url URL] [--model-key KEY] [--model NAME]
-         [--allow-unenforced-egress] <dir | user/name[@version]>
+         [--allow-unenforced-egress] [--allow-global-anthropic-secret] <dir | user/name[@version]>
   Shows the declared permissions and run plan, asks to confirm (--yes skips),
   then runs the agent with sbx. Mount paths are relative to --workdir
   (default: the current directory). The model endpoint comes from --model-url
   / --model-key / --model or CAPM_MODEL_URL / CAPM_MODEL_KEY / CAPM_MODEL.
   Each declared secret NAME is read from CAPM_SECRET_<NAME>, else prompted
-  for without echo. capm cannot yet enforce exact-host egress, so run refuses
-  to start unless --allow-unenforced-egress is given.
+  for without echo (never from the sbx secret store). capm cannot yet enforce
+  exact-host egress, so run refuses to start unless --allow-unenforced-egress
+  is given. It also refuses when a global sbx "anthropic" secret is stored,
+  since the sandbox can reach api.anthropic.com, unless
+  --allow-global-anthropic-secret is given.
 `
 
 // run executes the CLI with args (excluding the program name) and returns the exit code.

@@ -65,3 +65,16 @@ func TestParseRejectsInvalidYAML(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+func TestParseRejectsSecondDocument(t *testing.T) {
+	if _, err := Parse([]byte(goodYAML + "---\nbogus: 1\n")); err == nil {
+		t.Fatal("expected error for a second YAML document")
+	}
+	if _, err := Parse([]byte(goodYAML + "---\n" + goodYAML)); err == nil {
+		t.Fatal("expected error for a repeated manifest document")
+	}
+	// A lone document separator at the start is still one document.
+	if _, err := Parse([]byte("---\n" + goodYAML)); err != nil {
+		t.Fatalf("leading --- rejected: %v", err)
+	}
+}

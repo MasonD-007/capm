@@ -2,7 +2,6 @@ package manifest
 
 import (
 	"fmt"
-	"net/url"
 	"slices"
 	"strings"
 )
@@ -39,10 +38,7 @@ func (m *Manifest) EnforcedSummary() Summary {
 
 	mcp := make([]MCPEntry, 0, len(m.MCP))
 	for _, c := range m.MCP {
-		host := ""
-		if u, err := url.Parse(c.URL); err == nil {
-			host = u.Host
-		}
+		host, _ := MCPHost(c.URL) // "" for a URL Validate would reject
 		mcp = append(mcp, MCPEntry{Name: c.Name, URL: c.URL, Host: host, Secret: c.Secret})
 	}
 	return Summary{

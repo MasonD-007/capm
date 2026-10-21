@@ -83,3 +83,14 @@ func TestSummaryJSONTags(t *testing.T) {
 		}
 	}
 }
+
+func TestMCPEntryHostIsLowercaseHostname(t *testing.T) {
+	m := validManifest()
+	m.MCP[0].URL = "https://MCP.Example.com:443/mcp"
+	if err := m.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if h := m.EnforcedSummary().MCP[0].Host; h != "mcp.example.com" {
+		t.Fatalf("Host = %q, want mcp.example.com", h)
+	}
+}

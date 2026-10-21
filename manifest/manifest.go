@@ -91,5 +91,11 @@ func Parse(data []byte) (*Manifest, error) {
 		}
 		return nil, fmt.Errorf("manifest: %w", err)
 	}
+	// One document only: anything after a second "---" would otherwise be
+	// silently ignored by capm but might be read by other tools.
+	var extra yaml.Node
+	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
+		return nil, errors.New("manifest: must be a single YAML document")
+	}
 	return &m, nil
 }

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -119,19 +120,23 @@ func (m *Manifest) Validate() error {
 			add("mcp[%d].name %q is a duplicate", i, c.Name)
 		}
 		mcpNames[c.Name] = true
-		u, err := url.Parse(c.URL)
-		if err != nil || u.Scheme != "https" || u.Host == "" {
-			add("mcp[%d].url %q must be an https URL", i, c.URL)
-		} else if u.User != nil {
-			add("mcp[%d].url must not contain userinfo (manifests hold secret names only)", i)
+		if _, err := MCPHost(c.URL); err != nil {
+			add("mcp[%d].url %q %v", i, c.URL, err)
 		}
 		if c.Secret != "" && !declared[c.Secret] {
 			add("mcp[%d].secret %q is not declared in secrets", i, c.Secret)
 		}
 	}
 	for i, p := range m.Context {
-		if !localPath(p) {
-			add("context[%d] %q must be a relative path inside the bundle", i, p)
+		// The path is written into a header line of the generated kit
+		// context ("<!-- capm context file: PATH -->"), which sbx expands
+		// ${{ ... }} in, so neither may appear; and it must already be in
+		// clean form so what inspect shows is exactly the file read.
+		switch {
+		case !localPath(p) || path.Clean(p) != p:
+			add("context[%d] %q must be a clean relative path inside the bundle", i, p)
+		case strings.Contains(p, "${{") || strings.Contains(p, "-->"):
+			add("context[%d] %q must not contain \"${{\" or \"-->\"", i, p)
 		}
 	}
 	return errors.Join(errs...)
@@ -143,6 +148,71 @@ func localPath(p string) bool {
 	return p != "" && !filepath.IsAbs(p) && filepath.IsLocal(p)
 }
 
+// MCPHost checks an MCP server URL and returns its lowercase hostname. The
+// host gets the same rules as permissions.egress (exact DNS name, no IP
+// literal), plus: no userinfo, port absent or 443, and no names that only
+// make sense on the installer's own network (localhost, .local, .internal).
+func MCPHost(raw string) (string, error) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.Opaque != "" {
+		return "", errors.New("must be an https URL")
+	}
+	if u.User != nil {
+		return "", errors.New("must not contain userinfo (manifests hold secret names only)")
+	}
+	if strings.HasPrefix(u.Host, "[") {
+		return "", errors.New("must name a host, not an IP address")
+	}
+	if strings.HasSuffix(u.Host, ":") || (u.Port() != "" && u.Port() != "443") {
+		return "", errors.New("must use the default https port (443)")
+	}
+	h := strings.ToLower(u.Hostname())
+	if len(h) > 253 || !hostRe.MatchString(h) || !hasAlpha.MatchString(h) {
+		return "", errors.New("must have a plain DNS hostname (no IP address, no trailing dot)")
+	}
+	if h == "localhost" || strings.HasSuffix(h, ".localhost") ||
+		strings.HasSuffix(h, ".local") || h == "local" ||
+		strings.HasSuffix(h, ".internal") || h == "internal" {
+		return "", errors.New("must not name a local-network host (localhost, .local, .internal)")
+	}
+	return h, nil
+}
+
+// hasControl reports characters that can corrupt or disguise terminal and
+// web output: Unicode control characters (C0, DEL, C1 including NEL), line
+// and paragraph separators, and bidi embedding/override/isolate/mark
+// characters, which can visually reorder text.
 func hasControl(s string) bool {
-	return strings.IndexFunc(s, func(r rune) bool { return r < 0x20 || r == 0x7f }) >= 0
+	return strings.IndexFunc(s, isUnsafeRune) >= 0
+}
+
+func isUnsafeRune(r rune) bool {
+	switch {
+	case unicode.IsControl(r):
+		return true
+	case r == '\u2028', r == '\u2029': // line / paragraph separator
+		return true
+	case r >= '\u202a' && r <= '\u202e': // LRE, RLE, PDF, LRO, RLO
+		return true
+	case r >= '\u2066' && r <= '\u2069': // LRI, RLI, FSI, PDI
+		return true
+	case r == '\u200e', r == '\u200f', r == '\u061c': // LRM, RLM, ALM
+		return true
+	}
+	return false
+}
+
+// DisplaySafe returns s with every character hasControl rejects replaced by
+// U+FFFD. Validate already refuses such manifests; this is defence in depth
+// for code paths that print manifest strings.
+func DisplaySafe(s string) string {
+	if !hasControl(s) {
+		return s
+	}
+	return strings.Map(func(r rune) rune {
+		if isUnsafeRune(r) {
+			return '\uFFFD'
+		}
+		return r
+	}, s)
 }

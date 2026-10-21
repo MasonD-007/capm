@@ -234,19 +234,75 @@ func TestInvalidManifest400(t *testing.T) {
 	}
 }
 
-func TestOwnership403(t *testing.T) {
+func TestOwnership(t *testing.T) {
 	e := setup(t)
 	if c, b := e.do(t, "PUT", "/v1/bundles/alice/x/1.0.0", bundle(t, "x", "1.0.0")); c != 201 {
 		t.Fatalf("%d %s", c, b)
 	}
-	// Different owner ID publishing the same name under their own login.
+	// Names are per owner: bob can publish his own x.
 	e.user.id, e.user.login = 2, "bob"
-	if c, b := e.do(t, "PUT", "/v1/bundles/bob/x/1.1.0", bundle(t, "x", "1.1.0")); c != 403 {
-		t.Fatalf("name owned: %d %s", c, b)
+	if c, b := e.do(t, "PUT", "/v1/bundles/bob/x/1.1.0", bundle(t, "x", "1.1.0")); c != 201 {
+		t.Fatalf("bob own x: %d %s", c, b)
 	}
-	// Publishing under someone else's login in the URL.
-	if c, b := e.do(t, "PUT", "/v1/bundles/alice/y/1.0.0", bundle(t, "y", "1.0.0")); c != 403 {
+	// Publishing under someone else's login in the URL is forbidden.
+	if c, b := e.do(t, "PUT", "/v1/bundles/alice/x/1.2.0", bundle(t, "x", "1.2.0")); c != 403 {
 		t.Fatalf("url owner: %d %s", c, b)
+	}
+	// Login comparison is case-insensitive.
+	if c, b := e.do(t, "PUT", "/v1/bundles/BOB/y/1.0.0", bundle(t, "y", "1.0.0")); c != 201 {
+		t.Fatalf("case: %d %s", c, b)
+	}
+}
+
+func TestLoginReassigned(t *testing.T) {
+	e := setup(t)
+	old := bundle(t, "x", "1.0.0")
+	e.do(t, "PUT", "/v1/bundles/alice/x/1.0.0", old)
+	e.user.id = 2 // id 2 now holds the login "alice"
+	nw := bundle(t, "x", "2.0.0")
+	if c, b := e.do(t, "PUT", "/v1/bundles/alice/x/2.0.0", nw); c != 201 {
+		t.Fatalf("%d %s", c, b)
+	}
+	c, b := e.do(t, "GET", "/v1/bundles/alice/x", nil)
+	if c != 200 || bytes.Contains(b, []byte(`"1.0.0"`)) || !bytes.Contains(b, []byte(`"2.0.0"`)) {
+		t.Fatalf("%d %s", c, b)
+	}
+	if c, got := e.do(t, "GET", "/v1/bundles/alice/x/2.0.0/download", nil); c != 200 || !bytes.Equal(got, nw) {
+		t.Fatalf("download %d", c)
+	}
+	if c, _ := e.do(t, "GET", "/v1/bundles/alice/x/1.0.0/download", nil); c != 404 {
+		t.Fatalf("old owner reachable: %d", c)
+	}
+}
+
+func TestUnsafeEntries400(t *testing.T) {
+	e := setup(t)
+	y := "apiVersion: capm/v0\nkind: Agent\nmetadata: {name: x, version: 1.0.0}\nbase: {agent: claude-code, version: 1}\ninterface: {type: tty}\nmodel: {api: a, requires: {toolCalling: true, minContextTokens: 1}}\ncontext: [a.txt]\n"
+	for name, h := range map[string]tar.Header{
+		"symlink":  {Name: "a.txt", Typeflag: tar.TypeSymlink, Linkname: "/etc/passwd"},
+		"absolute": {Name: "/tmp/capm-abs-evil", Typeflag: tar.TypeReg, Size: 1},
+	} {
+		var buf bytes.Buffer
+		gz := gzip.NewWriter(&buf)
+		tw := tar.NewWriter(gz)
+		tw.WriteHeader(&tar.Header{Name: "capm.yaml", Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(len(y))})
+		tw.Write([]byte(y))
+		h.Mode = 0o644
+		tw.WriteHeader(&h)
+		if h.Size > 0 {
+			tw.Write([]byte("x"))
+		}
+		tw.Close()
+		gz.Close()
+		if c, b := e.do(t, "PUT", "/v1/bundles/alice/x/1.0.0", buf.Bytes()); c != 400 {
+			t.Fatalf("%s: %d %s", name, c, b)
+		}
+		if ents, _ := os.ReadDir(filepath.Join(e.dir, "blobs")); len(ents) != 0 {
+			t.Fatalf("%s: blobs left", name)
+		}
+	}
+	if _, err := os.Stat("/tmp/capm-abs-evil"); err == nil {
+		t.Fatal("absolute path written")
 	}
 }
 

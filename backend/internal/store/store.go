@@ -21,7 +21,6 @@ import (
 
 var (
 	ErrVersionExists = errors.New("store: version already exists")
-	ErrNameOwned     = errors.New("store: name is owned by another owner")
 	ErrNotFound      = errors.New("store: not found")
 	// ErrInvalid wraps problems with the submitted bundle; the message holds
 	// the details and is safe to show to the publisher.
@@ -50,12 +49,12 @@ type Store struct {
 const schema = `
 CREATE TABLE IF NOT EXISTS users (
 	id    INTEGER PRIMARY KEY,
-	login TEXT NOT NULL
+	login TEXT NOT NULL UNIQUE COLLATE NOCASE
 );
-CREATE INDEX IF NOT EXISTS users_login ON users(login);
 CREATE TABLE IF NOT EXISTS bundles (
-	name     TEXT PRIMARY KEY,
-	owner_id INTEGER NOT NULL REFERENCES users(id)
+	owner_id INTEGER NOT NULL REFERENCES users(id),
+	name     TEXT NOT NULL,
+	PRIMARY KEY(owner_id, name)
 );
 CREATE TABLE IF NOT EXISTS versions (
 	owner_id   INTEGER NOT NULL,
@@ -142,19 +141,17 @@ func (s *Store) Publish(ownerID int64, ownerLogin, name, version string, tarball
 	}
 	defer tx.Rollback()
 
+	// GitHub logins can be reassigned: free this login from any other id
+	// (tombstone "~<id>" cannot match a URL owner) so logins stay unique.
+	if _, err := tx.Exec(`UPDATE users SET login = '~' || id WHERE login = ? AND id != ?`, ownerLogin, ownerID); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(`INSERT INTO users(id, login) VALUES(?, ?)
 		ON CONFLICT(id) DO UPDATE SET login = excluded.login`, ownerID, ownerLogin); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(`INSERT OR IGNORE INTO bundles(name, owner_id) VALUES(?, ?)`, name, ownerID); err != nil {
 		return err
-	}
-	var holder int64
-	if err := tx.QueryRow(`SELECT owner_id FROM bundles WHERE name = ?`, name).Scan(&holder); err != nil {
-		return err
-	}
-	if holder != ownerID {
-		return ErrNameOwned
 	}
 	if _, err := tx.Exec(`INSERT INTO versions(owner_id, name, version, digest, manifest, created_at)
 		VALUES(?, ?, ?, ?, ?, ?)`, ownerID, name, version, "sha256:"+hexsum, string(mj), time.Now().Unix()); err != nil {

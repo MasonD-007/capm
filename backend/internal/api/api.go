@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/MasonD-007/capm/backend/internal/store"
@@ -133,7 +134,7 @@ func (a *API) publish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	owner, name, version := r.PathValue("owner"), r.PathValue("name"), r.PathValue("version")
-	if owner != login {
+	if !strings.EqualFold(owner, login) {
 		writeErr(w, 403, "you can only publish under your own login")
 		return
 	}
@@ -155,8 +156,6 @@ func (a *API) publish(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err.Error())
 	case errors.Is(err, store.ErrVersionExists):
 		writeErr(w, 409, "version already exists")
-	case errors.Is(err, store.ErrNameOwned):
-		writeErr(w, 403, "name is owned by another user")
 	default:
 		internal(w, err)
 	}

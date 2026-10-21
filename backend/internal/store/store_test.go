@@ -44,6 +44,23 @@ func rawTar(t *testing.T, entries map[string]string, order []string) []byte {
 	return buf.Bytes()
 }
 
+func typedTar(t *testing.T, h tar.Header, body string) []byte {
+	t.Helper()
+	y := "apiVersion: capm/v0\nkind: Agent\nmetadata: {name: x, version: 1.0.0}\nbase: {agent: claude-code, version: 1}\ninterface: {type: tty}\nmodel: {api: a, requires: {toolCalling: true, minContextTokens: 1}}\ncontext: [a.txt]\n"
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	tw.WriteHeader(&tar.Header{Name: "capm.yaml", Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(len(y))})
+	tw.Write([]byte(y))
+	h.Mode = 0o644
+	h.Size = int64(len(body))
+	tw.WriteHeader(&h)
+	tw.Write([]byte(body))
+	tw.Close()
+	gz.Close()
+	return buf.Bytes()
+}
+
 func open(t *testing.T) (*Store, string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -92,8 +109,15 @@ func TestDuplicateAndOwnership(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 	tb2 := bundle(t, "x", "1.1.0")
-	if err := s.Publish(2, "bob", "x", "1.1.0", tb2); !errors.Is(err, ErrNameOwned) {
-		t.Fatalf("got %v", err)
+	// A different owner may publish the same name under their own namespace.
+	if err := s.Publish(2, "bob", "x", "1.1.0", tb2); err != nil {
+		t.Fatalf("bob: %v", err)
+	}
+	if vs, _ := s.Versions("bob", "x"); len(vs) != 1 || vs[0].Version != "1.1.0" {
+		t.Fatalf("bob versions %+v", vs)
+	}
+	if vs, _ := s.Versions("alice", "x"); len(vs) != 1 || vs[0].Version != "1.0.0" {
+		t.Fatalf("alice versions %+v", vs)
 	}
 	if err := s.Publish(1, "alice", "x", "1.1.0", tb2); err != nil {
 		t.Fatal(err)
@@ -104,10 +128,6 @@ func TestFailedPublishLeavesNoBlob(t *testing.T) {
 	s, dir := open(t)
 	tb := bundle(t, "x", "1.0.0")
 	s.Publish(1, "alice", "x", "1.0.0", tb)
-	other := bundle(t, "x", "1.0.1")
-	if err := s.Publish(2, "bob", "x", "1.0.1", other); !errors.Is(err, ErrNameOwned) {
-		t.Fatal(err)
-	}
 	if err := s.Publish(1, "alice", "x", "1.0.0", tb); !errors.Is(err, ErrVersionExists) {
 		t.Fatal(err)
 	}
@@ -125,6 +145,8 @@ func TestInvalid(t *testing.T) {
 		"version mismatch": bundle(t, "x", "2.0.0"),
 		"not gzip":         []byte("hello"),
 		"evil path":        rawTar(t, map[string]string{"capm.yaml": "x", "../evil": "x"}, []string{"../evil", "capm.yaml"}),
+		"symlink":          typedTar(t, tar.Header{Name: "a.txt", Typeflag: tar.TypeSymlink, Linkname: "/etc/passwd"}, ""),
+		"absolute path":    typedTar(t, tar.Header{Name: "/tmp/capm-abs-evil", Typeflag: tar.TypeReg}, "x"),
 	}
 	for n, tb := range cases {
 		if err := s.Publish(1, "alice", "x", "1.0.0", tb); !errors.Is(err, ErrInvalid) {
@@ -138,6 +160,33 @@ func TestInvalid(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(filepath.Dir(dir), "evil")); err == nil {
 		t.Fatal("evil written")
+	}
+}
+
+func TestLoginReassigned(t *testing.T) {
+	s, _ := open(t)
+	old := bundle(t, "x", "1.0.0")
+	if err := s.Publish(1, "alice", "x", "1.0.0", old); err != nil {
+		t.Fatal(err)
+	}
+	// alice (id 1) renames away; id 2 takes the login "Alice".
+	nw := bundle(t, "x", "2.0.0")
+	if err := s.Publish(2, "Alice", "x", "2.0.0", nw); err != nil {
+		t.Fatal(err)
+	}
+	vs, err := s.Versions("alice", "x")
+	if err != nil || len(vs) != 1 || vs[0].Version != "2.0.0" {
+		t.Fatalf("versions %+v %v", vs, err)
+	}
+	if b, err := s.Blob("alice", "x", "2.0.0"); err != nil || !bytes.Equal(b, nw) {
+		t.Fatalf("blob %v", err)
+	}
+	if _, err := s.Blob("alice", "x", "1.0.0"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("old owner reachable: %v", err)
+	}
+	bs, _ := s.List(10, 0)
+	if len(bs) != 2 {
+		t.Fatalf("list %+v", bs)
 	}
 }
 

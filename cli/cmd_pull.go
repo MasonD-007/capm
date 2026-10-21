@@ -13,10 +13,11 @@ import (
 	"github.com/MasonD-007/capm/manifest"
 )
 
+var sha256Re = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
 var semverRe = regexp.MustCompile(`^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$`)
 
-// fetch resolves spec and downloads the bundle, checking the digest when the
-// registry supplies one.
+// fetch resolves spec and downloads the bundle, checking its sha256 digest.
 func fetch(c *client.Client, owner, name, spec string) ([]byte, client.Resolved, error) {
 	res, err := c.Resolve(owner, name, spec)
 	if err != nil {
@@ -32,11 +33,15 @@ func fetch(c *client.Client, owner, name, spec string) ([]byte, client.Resolved,
 	if err != nil {
 		return nil, res, err
 	}
-	if want, ok := strings.CutPrefix(res.Digest, "sha256:"); ok {
-		sum := sha256.Sum256(b)
-		if hex.EncodeToString(sum[:]) != want {
-			return nil, res, fmt.Errorf("downloaded bundle does not match its digest %s", client.Sanitize(res.Digest))
-		}
+	// No digest, or one capm cannot check, is an error: silently skipping
+	// verification would make a tampered download look verified.
+	want, ok := strings.CutPrefix(res.Digest, "sha256:")
+	if !ok || !sha256Re.MatchString(want) {
+		return nil, res, fmt.Errorf("registry did not supply a sha256 digest for this bundle (got %q); refusing to use it unverified", client.Sanitize(res.Digest))
+	}
+	sum := sha256.Sum256(b)
+	if hex.EncodeToString(sum[:]) != want {
+		return nil, res, fmt.Errorf("downloaded bundle does not match its digest %s", client.Sanitize(res.Digest))
 	}
 	return b, res, nil
 }

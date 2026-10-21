@@ -166,7 +166,7 @@ func TestRunDeclineRunsNothing(t *testing.T) {
 		t.Errorf("runner called %d times", h.runner.count())
 	}
 	s := h.out.String()
-	for _, want := range []string{"Network (bundle egress", "api.github.com", "Base agent (sbx) egress", "api.anthropic.com",
+	for _, want := range []string{"Network (declared bundle egress", "api.github.com", "Base agent (sbx) egress", "api.anthropic.com",
 		"Model endpoint (supplied by you): models.example.com", "Egress enforcement: NOT ENFORCED", "/home/agent/.claude/CLAUDE.md", "not verified", "Proceed?"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("confirmation lacks %q:\n%s", want, s)

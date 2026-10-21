@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -39,6 +41,7 @@ type fakeRegistry struct {
 
 	userCode, verifyURI string // override device-flow fields
 	digest, meLogin     string
+	literalDigest       bool   // send digest as is, even when empty
 	forceVersion        string // override the version resolve reports
 
 	polls int // number of /auth/token calls
@@ -117,7 +120,12 @@ func newFakeRegistry(t *testing.T) *fakeRegistry {
 			return
 		}
 		fv := f.versions[o+"/"+n+"@"+pick]
-		out := map[string]any{"version": pick, "digest": f.digest, "yanked": fv.yanked}
+		digest := f.digest
+		if digest == "" && !f.literalDigest {
+			sum := sha256.Sum256(fv.tar)
+			digest = "sha256:" + hex.EncodeToString(sum[:])
+		}
+		out := map[string]any{"version": pick, "digest": digest, "yanked": fv.yanked}
 		if fv.yanked {
 			out["warning"] = "yanked"
 		}

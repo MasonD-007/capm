@@ -95,3 +95,16 @@ func TestPathEscaping(t *testing.T) {
 		t.Fatalf("owner not escaped: %s", got)
 	}
 }
+
+func TestSanitizeDropsBidiAndSeparators(t *testing.T) {
+	in := "a‮b⁦c d\u0085e\x1bf‏g"
+	got := client.Sanitize(in)
+	for _, r := range []rune{'‮', '⁦', ' ', '\u0085', '\x1b', '‏'} {
+		if strings.ContainsRune(got, r) {
+			t.Errorf("Sanitize(%q) = %q keeps %U", in, got, r)
+		}
+	}
+	if got != "abcdefg" {
+		t.Errorf("Sanitize(%q) = %q, want abcdefg", in, got)
+	}
+}

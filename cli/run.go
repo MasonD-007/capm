@@ -46,13 +46,13 @@ Usage:
 Commands:
   login     Authenticate with a registry
   push      Package and publish an agent to a registry
-  pull      Fetch an agent and verify its signature
-  inspect   Show the enforced permission summary
+  pull      Download a bundle and check it against the registry's sha256 digest (bundles are not signed)
+  inspect   Show the bundle's declared permissions (not enforced; see the egress line)
   run       Launch an agent in a Docker Sandbox (sbx)
 
 capm run [--yes] [--workdir DIR] [--model-url URL] [--model-key KEY] [--model NAME]
          [--allow-unenforced-egress] <dir | user/name[@version]>
-  Shows the permission summary and run plan, asks to confirm (--yes skips),
+  Shows the declared permissions and run plan, asks to confirm (--yes skips),
   then runs the agent with sbx. Mount paths are relative to --workdir
   (default: the current directory). The model endpoint comes from --model-url
   / --model-key / --model or CAPM_MODEL_URL / CAPM_MODEL_KEY / CAPM_MODEL.

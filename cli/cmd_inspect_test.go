@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/MasonD-007/capm/manifest"
 )
 
 func TestInspectFixture(t *testing.T) {
@@ -68,5 +70,38 @@ func TestInspectRejectsControlChars(t *testing.T) {
 	}
 	if !strings.Contains(errb.String(), "control characters") || out.Len() != 0 {
 		t.Errorf("stderr %q stdout %q", errb.String(), out.String())
+	}
+}
+
+// C1: user-facing text must not claim signing or enforcement v1 lacks.
+func TestUsageMakesNoSecurityOverclaims(t *testing.T) {
+	var out, errb bytes.Buffer
+	run([]string{"help"}, &out, &errb)
+	run([]string{"inspect"}, &out, &errb)
+	s := strings.ToLower(out.String() + errb.String())
+	for _, bad := range []string{"signature", "verify its", "enforced permission", "enforced summary", "guarantee"} {
+		if strings.Contains(s, bad) {
+			t.Errorf("usage claims %q:\n%s", bad, s)
+		}
+	}
+	if !strings.Contains(out.String(), "Show the bundle's declared permissions") {
+		t.Errorf("inspect usage line wrong:\n%s", out.String())
+	}
+}
+
+// I2 defence in depth: inspect never writes bidi/C1 controls even if a
+// manifest slipped past validation (here: an older registry bundle).
+func TestInspectOutputHasNoUnsafeRunes(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := run([]string{"inspect", "testdata/pr-reviewer"}, &out, &errb); code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	if strings.ContainsFunc(out.String(), func(r rune) bool { return r != '\n' && manifest.DisplaySafe(string(r)) != string(r) }) {
+		t.Errorf("unsafe rune in output: %q", out.String())
+	}
+	for _, h := range []string{"api.anthropic.com", manifest.EgressEnforcementNotice} {
+		if !strings.Contains(out.String(), h) {
+			t.Errorf("inspect lacks %q:\n%s", h, out.String())
+		}
 	}
 }

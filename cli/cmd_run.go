@@ -169,11 +169,14 @@ func runCmd(args []string, stdout, stderr io.Writer, e env) int {
 		}
 		os.RemoveAll(tmp)
 	}()
-	if tmp, err = filepath.EvalSymlinks(tmp); err != nil {
+	// Resolve into a new variable: the deferred RemoveAll above must keep
+	// the original path even when resolution fails.
+	tmpReal, err := filepath.EvalSymlinks(tmp)
+	if err != nil {
 		return fail("%v", err)
 	}
 
-	opts := sbx.Options{WorkDir: f.workdir, BundleDir: bundleDir, TempDir: tmp,
+	opts := sbx.Options{WorkDir: f.workdir, BundleDir: bundleDir, TempDir: tmpReal,
 		SandboxName:  sandboxName(m.Metadata.Name),
 		ModelBaseURL: modelURL, ModelKey: modelKey, ModelName: modelName}
 	info, err := sbx.Describe(m, opts)

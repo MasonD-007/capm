@@ -11,7 +11,7 @@ import (
 	"github.com/MasonD-007/capm/manifest"
 )
 
-// inspect prints the enforced permission summary for the bundle in args[0].
+// inspect prints the declared-permission summary for the bundle in args[0].
 func inspect(args []string, stdout, stderr io.Writer, e env) int {
 	if len(args) != 1 {
 		fmt.Fprintf(stderr, "usage: capm inspect <dir | user/name[@version]>\n(an existing local path wins over a registry reference; use ./user/name to force local)\n")

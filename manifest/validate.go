@@ -183,10 +183,11 @@ func MCPHost(raw string) (string, error) {
 // and paragraph separators, and bidi embedding/override/isolate/mark
 // characters, which can visually reorder text.
 func hasControl(s string) bool {
-	return strings.IndexFunc(s, isUnsafeRune) >= 0
+	return strings.IndexFunc(s, IsUnsafeRune) >= 0
 }
 
-func isUnsafeRune(r rune) bool {
+// IsUnsafeRune reports whether r is one of the characters hasControl rejects.
+func IsUnsafeRune(r rune) bool {
 	switch {
 	case unicode.IsControl(r):
 		return true
@@ -210,7 +211,7 @@ func DisplaySafe(s string) string {
 		return s
 	}
 	return strings.Map(func(r rune) rune {
-		if isUnsafeRune(r) {
+		if IsUnsafeRune(r) {
 			return '\uFFFD'
 		}
 		return r

@@ -11,6 +11,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/MasonD-007/capm/manifest"
 )
 
 const (
@@ -46,13 +48,14 @@ type VersionInfo struct {
 }
 
 // Sanitize makes a server-supplied string safe to print on a terminal: C0
-// controls (including ESC and newlines), DEL and C1 controls are dropped and
-// the result is truncated to 200 runes.
+// controls (including ESC and newlines), DEL, C1 controls, line/paragraph
+// separators and bidi controls (manifest.IsUnsafeRune) are dropped and the
+// result is truncated to 200 runes.
 func Sanitize(s string) string {
 	var b strings.Builder
 	n := 0
 	for _, r := range s {
-		if r < 0x20 || (r >= 0x7f && r <= 0x9f) {
+		if manifest.IsUnsafeRune(r) {
 			continue
 		}
 		if n++; n > 200 {

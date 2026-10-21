@@ -51,6 +51,7 @@ func (s *Service) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/auth/device", s.device)
 	mux.HandleFunc("POST /v1/auth/token", s.token)
+	mux.HandleFunc("GET /v1/auth/me", s.me)
 	return mux
 }
 
@@ -219,6 +220,16 @@ func (s *Service) token(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]string{"token": tok})
+}
+
+// me reports the identity a bearer token belongs to.
+func (s *Service) me(w http.ResponseWriter, r *http.Request) {
+	id, login, ok := s.Authenticate(r)
+	if !ok {
+		writeErr(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	writeJSON(w, 200, map[string]any{"id": id, "login": login})
 }
 
 func (s *Service) githubUser(accessToken string) (int64, string, error) {

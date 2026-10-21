@@ -304,3 +304,28 @@ func TestNoClientID(t *testing.T) {
 		}
 	}
 }
+
+func TestMe(t *testing.T) {
+	e := setup(t, "cid")
+	tok := e.login(t)
+	code, b := e.do(t, "GET", "/v1/auth/me", tok, nil)
+	if code != 200 {
+		t.Fatalf("%d %s", code, b)
+	}
+	var out struct {
+		ID    int64  `json:"id"`
+		Login string `json:"login"`
+	}
+	if err := json.Unmarshal(b, &out); err != nil || out.Login != "alice" || out.ID == 0 {
+		t.Fatalf("bad body %s", b)
+	}
+	if strings.Contains(string(b), tok) {
+		t.Fatal("token echoed")
+	}
+	if code, _ := e.do(t, "GET", "/v1/auth/me", "garbage", nil); code != 401 {
+		t.Fatalf("garbage token: %d", code)
+	}
+	if code, _ := e.do(t, "GET", "/v1/auth/me", "", nil); code != 401 {
+		t.Fatalf("no token: %d", code)
+	}
+}

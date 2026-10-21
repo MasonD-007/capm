@@ -262,3 +262,44 @@ func TestAuthRoutesLimitedPerIP(t *testing.T) {
 		}
 	}
 }
+
+type listItem struct {
+	Owner       string `json:"owner"`
+	Name        string `json:"name"`
+	Latest      string `json:"latest"`
+	Description string `json:"description"`
+}
+
+func (e *env) list(t *testing.T) []listItem {
+	t.Helper()
+	c, b := e.do(t, "GET", "/v1/bundles", nil)
+	if c != 200 {
+		t.Fatalf("%d %s", c, b)
+	}
+	var out []listItem
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func TestListLatestSkipsYanked(t *testing.T) {
+	e, _ := setupCfg(t, Config{})
+	publishVersions(t, e, "1.0.0", "1.1.0", "2.0.0-rc.1")
+	if l := e.list(t); len(l) != 1 || l[0].Latest != "1.1.0" || l[0].Owner != "alice" || l[0].Name != "x" {
+		t.Fatalf("%+v", l)
+	}
+	e.do(t, "POST", "/v1/bundles/alice/x/1.1.0/yank", nil)
+	if l := e.list(t); l[0].Latest != "1.0.0" {
+		t.Fatalf("yanked 1.1.0 must not be latest: %+v", l)
+	}
+	e.do(t, "POST", "/v1/bundles/alice/x/1.0.0/yank", nil)
+	// Only a prerelease is left installable, same as /resolve.
+	if l := e.list(t); l[0].Latest != "2.0.0-rc.1" {
+		t.Fatalf("%+v", l)
+	}
+	e.do(t, "POST", "/v1/bundles/alice/x/2.0.0-rc.1/yank", nil)
+	if l := e.list(t); len(l) != 1 || l[0].Latest != "" || l[0].Description != "" {
+		t.Fatalf("all yanked: %+v", l)
+	}
+}

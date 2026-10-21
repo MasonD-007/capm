@@ -116,10 +116,25 @@ func (a *API) list(w http.ResponseWriter, r *http.Request) {
 		Owner      int64  `json:"ownerId"`
 		OwnerLogin string `json:"owner"`
 		Name       string `json:"name"`
+		// Latest is the version `capm run` would resolve (see
+		// latestInstallable); empty when every version is yanked.
+		Latest string `json:"latest"`
+		// Description is that version's author-supplied description
+		// (unverified); empty when Latest is.
+		Description string `json:"description"`
 	}
 	out := make([]item, 0, len(bs))
 	for _, b := range bs {
-		out = append(out, item{b.Owner, b.OwnerLogin, b.Name})
+		it := item{Owner: b.Owner, OwnerLogin: b.OwnerLogin, Name: b.Name}
+		vs, err := a.store.Versions(b.OwnerLogin, b.Name)
+		if err != nil {
+			internal(w, err)
+			return
+		}
+		if v := latestInstallable(vs); v != nil {
+			it.Latest, it.Description = v.Version, v.Manifest.Metadata.Description
+		}
+		out = append(out, it)
 	}
 	writeJSON(w, 200, out)
 }
@@ -245,29 +260,7 @@ func (a *API) resolve(w http.ResponseWriter, r *http.Request) {
 	}
 	var pick *store.Version
 	if rng == "latest" {
-		var best, bestPre *semver
-		var bv, bpv *store.Version
-		for i := range vs {
-			if vs[i].Yanked {
-				continue
-			}
-			sv, ok := parseSemver(vs[i].Version)
-			if !ok {
-				continue
-			}
-			if len(sv.pre) == 0 {
-				if best == nil || sv.compare(*best) > 0 {
-					best, bv = &sv, &vs[i]
-				}
-			} else if bestPre == nil || sv.compare(*bestPre) > 0 {
-				bestPre, bpv = &sv, &vs[i]
-			}
-		}
-		if bv != nil {
-			pick = bv
-		} else {
-			pick = bpv
-		}
+		pick = latestInstallable(vs)
 		if pick == nil {
 			writeErr(w, 404, "no installable version: every version of this bundle is yanked")
 			return
@@ -288,4 +281,32 @@ func (a *API) resolve(w http.ResponseWriter, r *http.Request) {
 		out["warning"] = "yanked"
 	}
 	writeJSON(w, 200, out)
+}
+
+// latestInstallable is the highest semver among non-yanked versions,
+// preferring releases over prereleases; nil if none. Shared by /resolve and
+// the list so both agree on what "latest" means.
+func latestInstallable(vs []store.Version) *store.Version {
+	var best, bestPre *semver
+	var bv, bpv *store.Version
+	for i := range vs {
+		if vs[i].Yanked {
+			continue
+		}
+		sv, ok := parseSemver(vs[i].Version)
+		if !ok {
+			continue
+		}
+		if len(sv.pre) == 0 {
+			if best == nil || sv.compare(*best) > 0 {
+				best, bv = &sv, &vs[i]
+			}
+		} else if bestPre == nil || sv.compare(*bestPre) > 0 {
+			bestPre, bpv = &sv, &vs[i]
+		}
+	}
+	if bv != nil {
+		return bv
+	}
+	return bpv
 }

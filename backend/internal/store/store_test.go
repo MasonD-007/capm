@@ -185,8 +185,32 @@ func TestLoginReassigned(t *testing.T) {
 		t.Fatalf("old owner reachable: %v", err)
 	}
 	bs, _ := s.List(10, 0)
-	if len(bs) != 2 {
-		t.Fatalf("list %+v", bs)
+	if len(bs) != 1 || bs[0].OwnerLogin != "Alice" || bs[0].Owner != 2 {
+		t.Fatalf("list should skip tombstoned owner: %+v", bs)
+	}
+}
+
+func TestTokens(t *testing.T) {
+	s, _ := open(t)
+	if err := s.UpsertUser(7, "bob"); err != nil {
+		t.Fatal(err)
+	}
+	h := []byte("0123456789abcdef0123456789abcdef")
+	if err := s.CreateToken(h, 7); err != nil {
+		t.Fatal(err)
+	}
+	id, login, err := s.UserByTokenHash(h)
+	if err != nil || id != 7 || login != "bob" {
+		t.Fatalf("%d %q %v", id, login, err)
+	}
+	if err := s.UpsertUser(7, "bobby"); err != nil {
+		t.Fatal(err)
+	}
+	if _, login, _ := s.UserByTokenHash(h); login != "bobby" {
+		t.Fatalf("login not current: %q", login)
+	}
+	if _, _, err := s.UserByTokenHash([]byte("nope")); !errors.Is(err, ErrNotFound) {
+		t.Fatal(err)
 	}
 }
 

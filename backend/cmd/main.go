@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/MasonD-007/capm/backend/internal/api"
+	"github.com/MasonD-007/capm/backend/internal/auth"
 	"github.com/MasonD-007/capm/backend/internal/store"
 	"github.com/joho/godotenv"
 )
@@ -35,11 +36,18 @@ func main() {
 	}
 	defer st.Close()
 
-	// Task 4 replaces this hook with token authentication; until then nobody
-	// can publish.
-	reg := api.New(st, func(r *http.Request) (int64, string, bool) { return 0, "", false })
+	authSvc := auth.New(st, auth.Config{
+		ClientID: os.Getenv("GITHUB_CLIENT_ID"),
+		APIURL:   os.Getenv("GITHUB_API_URL"),
+		OAuthURL: os.Getenv("GITHUB_OAUTH_URL"),
+	})
+	if os.Getenv("GITHUB_CLIENT_ID") == "" {
+		log.Print("GITHUB_CLIENT_ID is unset: /v1/auth/* will return 503")
+	}
+	reg := api.New(st, authSvc.Authenticate)
 
 	mux := http.NewServeMux()
+	mux.Handle("/v1/auth/", authSvc.Handler())
 	mux.Handle("/v1/", reg.Handler())
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		log.Println("Health check endpoint hit")

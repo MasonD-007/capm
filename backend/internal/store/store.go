@@ -4,6 +4,7 @@ package store
 
 import (
 	"crypto/sha256"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -65,6 +66,11 @@ CREATE TABLE IF NOT EXISTS versions (
 	manifest   TEXT NOT NULL,
 	created_at INTEGER NOT NULL,
 	UNIQUE(owner_id, name, version)
+);
+CREATE TABLE IF NOT EXISTS tokens (
+	hash       BLOB PRIMARY KEY,
+	user_id    INTEGER NOT NULL REFERENCES users(id),
+	created_at INTEGER NOT NULL
 );`
 
 // Open creates dataDir if needed and opens (migrating) the database in it.
@@ -141,13 +147,7 @@ func (s *Store) Publish(ownerID int64, ownerLogin, name, version string, tarball
 	}
 	defer tx.Rollback()
 
-	// GitHub logins can be reassigned: free this login from any other id
-	// (tombstone "~<id>" cannot match a URL owner) so logins stay unique.
-	if _, err := tx.Exec(`UPDATE users SET login = '~' || id WHERE login = ? AND id != ?`, ownerLogin, ownerID); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(`INSERT INTO users(id, login) VALUES(?, ?)
-		ON CONFLICT(id) DO UPDATE SET login = excluded.login`, ownerID, ownerLogin); err != nil {
+	if err := upsertUser(tx, ownerID, ownerLogin); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(`INSERT OR IGNORE INTO bundles(name, owner_id) VALUES(?, ?)`, name, ownerID); err != nil {
@@ -225,7 +225,7 @@ func (s *Store) Blob(ownerLogin, name, version string) ([]byte, error) {
 
 func (s *Store) List(limit, offset int) ([]Bundle, error) {
 	rows, err := s.db.Query(`SELECT u.id, u.login, b.name FROM bundles b JOIN users u ON u.id = b.owner_id
-		ORDER BY u.login, b.name LIMIT ? OFFSET ?`, limit, offset)
+		WHERE u.login NOT LIKE '~%' ORDER BY u.login, b.name LIMIT ? OFFSET ?`, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -239,4 +239,62 @@ func (s *Store) List(limit, offset int) ([]Bundle, error) {
 		out = append(out, b)
 	}
 	return out, rows.Err()
+}
+
+type execer interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
+// upsertUser records that GitHub user id currently has login. GitHub logins
+// can be reassigned: any other id holding this login is tombstoned as
+// "~<id>" (which cannot match a URL owner) so logins stay unique.
+func upsertUser(x execer, id int64, login string) error {
+	if _, err := x.Exec(`UPDATE users SET login = '~' || id WHERE login = ? AND id != ?`, login, id); err != nil {
+		return err
+	}
+	_, err := x.Exec(`INSERT INTO users(id, login) VALUES(?, ?)
+		ON CONFLICT(id) DO UPDATE SET login = excluded.login`, id, login)
+	return err
+}
+
+// UpsertUser records the current login of a GitHub user.
+func (s *Store) UpsertUser(id int64, login string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := upsertUser(tx, id, login); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// CreateToken stores the hash of an API token for userID. The raw token is
+// never stored.
+func (s *Store) CreateToken(hash []byte, userID int64) error {
+	_, err := s.db.Exec(`INSERT INTO tokens(hash, user_id, created_at) VALUES(?, ?, ?)`,
+		hash, userID, time.Now().Unix())
+	return err
+}
+
+// UserByTokenHash resolves a token hash to the user's id and current login.
+func (s *Store) UserByTokenHash(hash []byte) (int64, string, error) {
+	var (
+		id     int64
+		login  string
+		stored []byte
+	)
+	err := s.db.QueryRow(`SELECT u.id, u.login, t.hash FROM tokens t JOIN users u ON u.id = t.user_id
+		WHERE t.hash = ?`, hash).Scan(&id, &login, &stored)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, "", ErrNotFound
+	}
+	if err != nil {
+		return 0, "", err
+	}
+	if subtle.ConstantTimeCompare(stored, hash) != 1 {
+		return 0, "", ErrNotFound
+	}
+	return id, login, nil
 }

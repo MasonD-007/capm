@@ -10,14 +10,40 @@ import (
 	"testing"
 )
 
-func hostileTar(t *testing.T) []byte {
+type hostileCase struct {
+	name string
+	hdr  tar.Header
+	want string // substring expected in the error
+}
+
+var hostileCases = []hostileCase{
+	{"traversal", tar.Header{Name: "../evil", Typeflag: tar.TypeReg}, "unsafe path"},
+	{"absolute", tar.Header{Name: "/tmp/capm-evil-abs", Typeflag: tar.TypeReg}, "unsafe path"},
+	{"symlink", tar.Header{Name: "link", Typeflag: tar.TypeSymlink, Linkname: "/etc/passwd"}, "not a regular file"},
+}
+
+// hostileTar returns a tarball whose first entry is a VALID capm.yaml,
+// followed by the hostile entry, so rejection can only come from the entry checks.
+func hostileTar(t *testing.T, c hostileCase) []byte {
 	t.Helper()
+	yml, err := os.ReadFile(filepath.Join(testBundleDir(t, "agent", "1.0.0"), "capm.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
-	for _, f := range []struct{ n, c string }{{"capm.yaml", "x: y\n"}, {"../evil", "pwned"}} {
-		tw.WriteHeader(&tar.Header{Name: f.n, Mode: 0o644, Size: int64(len(f.c)), Typeflag: tar.TypeReg})
-		tw.Write([]byte(f.c))
+	tw.WriteHeader(&tar.Header{Name: "capm.yaml", Mode: 0o644, Size: int64(len(yml)), Typeflag: tar.TypeReg})
+	tw.Write(yml)
+	h := c.hdr
+	h.Mode = 0o644
+	body := []byte("pwned")
+	if h.Typeflag == tar.TypeReg {
+		h.Size = int64(len(body))
+	}
+	tw.WriteHeader(&h)
+	if h.Typeflag == tar.TypeReg {
+		tw.Write(body)
 	}
 	tw.Close()
 	gz.Close()
@@ -49,18 +75,27 @@ func TestPullUnpacksIntoNameDir(t *testing.T) {
 }
 
 func TestPullHostileTarballWritesNothing(t *testing.T) {
-	h := newHarness(t)
-	root := chdirTemp(t)
-	h.reg.add("bob", "agent", "1.0.0", hostileTar(t), false)
-	if code := h.run("pull", "bob/agent@1.0.0"); code != 1 {
-		t.Fatalf("exit %d", code)
-	}
-	if _, err := os.Stat(filepath.Join(root, "evil")); err == nil {
-		t.Fatal("../evil was written")
-	}
-	ents, _ := os.ReadDir(".")
-	if len(ents) != 0 {
-		t.Errorf("cwd not empty after failed pull: %v", ents)
+	for _, c := range hostileCases {
+		t.Run(c.name, func(t *testing.T) {
+			h := newHarness(t)
+			root := chdirTemp(t)
+			h.reg.add("bob", "agent", "1.0.0", hostileTar(t, c), false)
+			if code := h.run("pull", "bob/agent@1.0.0"); code != 1 {
+				t.Fatalf("exit %d", code)
+			}
+			if !strings.Contains(h.errb.String(), c.want) {
+				t.Errorf("stderr should name the path-safety failure %q: %q", c.want, h.errb.String())
+			}
+			if ents, _ := os.ReadDir(root); len(ents) != 1 || ents[0].Name() != "work" {
+				t.Errorf("wrote outside cwd: %v", ents)
+			}
+			if ents, _ := os.ReadDir("."); len(ents) != 0 {
+				t.Errorf("cwd not clean after failed pull: %v", ents)
+			}
+			if _, err := os.Stat("/tmp/capm-evil-abs"); err == nil {
+				t.Error("absolute path was written")
+			}
+		})
 	}
 }
 
@@ -168,13 +203,102 @@ func TestInspectRemoteWritesNothing(t *testing.T) {
 }
 
 func TestInspectRemoteHostileExit1(t *testing.T) {
+	for _, c := range hostileCases {
+		t.Run(c.name, func(t *testing.T) {
+			h := newHarness(t)
+			root := chdirTemp(t)
+			h.reg.add("bob", "agent", "1.0.0", hostileTar(t, c), false)
+			if code := h.run("inspect", "bob/agent@1.0.0"); code != 1 {
+				t.Fatalf("exit %d", code)
+			}
+			if !strings.Contains(h.errb.String(), c.want) {
+				t.Errorf("stderr should name %q: %q", c.want, h.errb.String())
+			}
+			if ents, _ := os.ReadDir(root); len(ents) != 1 || ents[0].Name() != "work" {
+				t.Errorf("wrote outside cwd: %v", ents)
+			}
+			if ents, _ := os.ReadDir("."); len(ents) != 0 {
+				t.Errorf("cwd not clean: %v", ents)
+			}
+		})
+	}
+}
+
+func TestInspectHeaders(t *testing.T) {
 	h := newHarness(t)
-	root := chdirTemp(t)
-	h.reg.add("bob", "agent", "1.0.0", hostileTar(t), false)
-	if code := h.run("inspect", "bob/agent@1.0.0"); code != 1 {
+	chdirTemp(t)
+	h.reg.add("bob", "agent", "1.0.0", testBundleTar(t, "agent", "1.0.0"), false)
+	h.reg.add("bob", "agent", "1.1.0", testBundleTar(t, "agent", "1.1.0"), false)
+	if code := h.run("inspect", "bob/agent"); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.errb.String())
+	}
+	if !strings.Contains(h.errb.String(), "inspecting registry bob/agent@1.1.0\n") {
+		t.Errorf("registry header: %q", h.errb.String())
+	}
+	dir := testBundleDir(t, "agent", "1.0.0")
+	if code := h.run("inspect", dir); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.errb.String())
+	}
+	if !strings.Contains(h.errb.String(), "inspecting local "+dir+"\n") {
+		t.Errorf("local header: %q", h.errb.String())
+	}
+}
+
+const escape = "\x1b[2J\nFAKE"
+
+func assertClean(t *testing.T, h *harness) {
+	t.Helper()
+	for _, s := range []string{h.out.String(), h.errb.String()} {
+		if strings.ContainsRune(s, 0x1b) {
+			t.Errorf("escape sequence leaked: %q", s)
+		}
+		if strings.Contains(s, "\nFAKE") {
+			t.Errorf("newline injection: %q", s)
+		}
+	}
+}
+
+func TestServerStringsSanitized(t *testing.T) {
+	// error body
+	h := newHarness(t)
+	h.mustLogin(t)
+	h.reg.pushCode = 409
+	h.reg.pushMsg = escape
+	h.run("push", testBundleDir(t, "a", "1.0.0"))
+	assertClean(t, h)
+	if !strings.Contains(h.errb.String(), "registry error") {
+		t.Errorf("expected error output: %q", h.errb.String())
+	}
+	// user_code and verification_uri
+	h = newHarness(t)
+	h.reg.userCode, h.reg.verifyURI = escape, escape
+	h.mustLogin(t)
+	assertClean(t, h)
+	// resolved version
+	h = newHarness(t)
+	chdirTemp(t)
+	h.reg.add("bob", "agent", "1.0.0", testBundleTar(t, "agent", "1.0.0"), false)
+	h.reg.forceVersion = escape
+	for _, args := range [][]string{{"pull", "bob/agent"}, {"inspect", "bob/agent"}, {"pull", "bob/agent@1.0.0"}} {
+		if code := h.run(args...); code != 1 {
+			t.Errorf("%v: exit %d, want 1", args, code)
+		}
+		assertClean(t, h)
+	}
+	if ents, _ := os.ReadDir("."); len(ents) != 0 {
+		t.Errorf("cwd not clean: %v", ents)
+	}
+}
+
+func TestExactPinMustMatchResolved(t *testing.T) {
+	h := newHarness(t)
+	chdirTemp(t)
+	h.reg.add("bob", "agent", "1.0.0", testBundleTar(t, "agent", "1.0.0"), false)
+	h.reg.forceVersion = "9.9.9"
+	if code := h.run("pull", "bob/agent@1.0.0"); code != 1 {
 		t.Fatalf("exit %d", code)
 	}
-	if _, err := os.Stat(filepath.Join(root, "evil")); err == nil {
-		t.Fatal("../evil written")
+	if ents, _ := os.ReadDir("."); len(ents) != 0 {
+		t.Errorf("cwd not clean: %v", ents)
 	}
 }

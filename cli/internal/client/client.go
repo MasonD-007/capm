@@ -45,6 +45,25 @@ type VersionInfo struct {
 	CreatedAt time.Time `json:"createdAt"`
 }
 
+// Sanitize makes a server-supplied string safe to print on a terminal: C0
+// controls (including ESC and newlines), DEL and C1 controls are dropped and
+// the result is truncated to 200 runes.
+func Sanitize(s string) string {
+	var b strings.Builder
+	n := 0
+	for _, r := range s {
+		if r < 0x20 || (r >= 0x7f && r <= 0x9f) {
+			continue
+		}
+		if n++; n > 200 {
+			b.WriteString("...")
+			break
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
 // APIError is a non-2xx response from the registry.
 type APIError struct {
 	Status int
@@ -52,7 +71,7 @@ type APIError struct {
 }
 
 func (e *APIError) Error() string {
-	return fmt.Sprintf("registry error (%d): %s", e.Status, e.Msg)
+	return fmt.Sprintf("registry error (%d): %s", e.Status, Sanitize(e.Msg))
 }
 
 type Client struct {
@@ -200,7 +219,7 @@ func (c *Client) PollToken(deviceCode string) (string, error) {
 		case "slow_down":
 			interval += 5 * time.Second
 		default:
-			return "", fmt.Errorf("login failed: %s", ae.Msg)
+			return "", fmt.Errorf("login failed: %s", Sanitize(ae.Msg))
 		}
 		if waited >= timeout {
 			return "", errors.New("login timed out; run capm login again")

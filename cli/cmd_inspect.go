@@ -14,7 +14,7 @@ import (
 // inspect prints the enforced permission summary for the bundle in args[0].
 func inspect(args []string, stdout, stderr io.Writer, e env) int {
 	if len(args) != 1 {
-		fmt.Fprintf(stderr, "usage: capm inspect <dir | user/name[@version]>\n")
+		fmt.Fprintf(stderr, "usage: capm inspect <dir | user/name[@version]>\n(an existing local path wins over a registry reference; use ./user/name to force local)\n")
 		return 2
 	}
 	// An existing path is a local bundle; otherwise a well-formed reference is
@@ -23,10 +23,11 @@ func inspect(args []string, stdout, stderr io.Writer, e env) int {
 		if o, n, v, perr := parseRef(args[0]); perr == nil {
 			return inspectRemote(o, n, v, stdout, stderr, e)
 		} else if strings.Contains(args[0], "@") {
-			fmt.Fprintf(stderr, "capm inspect: %v\nusage: capm inspect <dir | user/name[@version]>\n", perr)
+			fmt.Fprintf(stderr, "capm inspect: %v\nusage: capm inspect <dir | user/name[@version]>\n(an existing local path wins over a registry reference; use ./user/name to force local)\n", perr)
 			return 2
 		}
 	}
+	fmt.Fprintf(stderr, "inspecting local %s\n", client.Sanitize(args[0]))
 	data, err := os.ReadFile(filepath.Join(args[0], manifest.FileName))
 	if err != nil {
 		fmt.Fprintf(stderr, "capm inspect: %v\n", err)
@@ -61,6 +62,7 @@ func inspectRemote(owner, name, spec string, stdout, stderr io.Writer, e env) in
 		fmt.Fprintf(stderr, "capm inspect: invalid bundle: %v\n", err)
 		return 1
 	}
+	fmt.Fprintf(stderr, "inspecting registry %s/%s@%s\n", owner, name, res.Version)
 	warnYanked(stderr, owner, name, res)
 	fmt.Fprint(stdout, m.EnforcedSummary().Render())
 	return 0

@@ -21,7 +21,7 @@ func login(args []string, stdout, stderr io.Writer, e env) int {
 		fmt.Fprintf(stderr, "capm login: %v\n", err)
 		return 1
 	}
-	fmt.Fprintf(stdout, "Open %s and enter the code: %s\nWaiting for authorization...\n", dc.VerificationURI, dc.UserCode)
+	fmt.Fprintf(stdout, "Open %s and enter the code: %s\nWaiting for authorization...\n", client.Sanitize(dc.VerificationURI), client.Sanitize(dc.UserCode))
 	tok, err := c.PollToken(dc.DeviceCode)
 	if err != nil {
 		fmt.Fprintf(stderr, "capm login: %v\n", err)

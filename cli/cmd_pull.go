@@ -6,11 +6,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/MasonD-007/capm/cli/internal/client"
 	"github.com/MasonD-007/capm/manifest"
 )
+
+var semverRe = regexp.MustCompile(`^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$`)
 
 // fetch resolves spec and downloads the bundle, checking the digest when the
 // registry supplies one.
@@ -18,6 +21,12 @@ func fetch(c *client.Client, owner, name, spec string) ([]byte, client.Resolved,
 	res, err := c.Resolve(owner, name, spec)
 	if err != nil {
 		return nil, res, err
+	}
+	if !semverRe.MatchString(res.Version) {
+		return nil, res, fmt.Errorf("registry returned an invalid version %q", client.Sanitize(res.Version))
+	}
+	if spec != "latest" && res.Version != spec {
+		return nil, res, fmt.Errorf("registry resolved %q to a different version %q", client.Sanitize(spec), client.Sanitize(res.Version))
 	}
 	b, err := c.Download(owner, name, res.Version)
 	if err != nil {

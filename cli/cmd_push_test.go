@@ -35,6 +35,10 @@ type fakeRegistry struct {
 	pushAuth string
 	pushPath string
 	pushCode int // override publish status when non-zero
+	pushMsg  string
+
+	userCode, verifyURI string // override device-flow fields
+	forceVersion        string // override the version resolve reports
 
 	polls int // number of /auth/token calls
 }
@@ -43,7 +47,11 @@ func newFakeRegistry(t *testing.T) *fakeRegistry {
 	f := &fakeRegistry{versions: map[string]*fakeVersion{}, order: map[string][]string{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/auth/device", func(w http.ResponseWriter, r *http.Request) {
-		io.WriteString(w, `{"device_code":"dc","user_code":"ABCD-1234","verification_uri":"https://example.test/device","interval":1,"expires_in":900}`)
+		uc, vu := "ABCD-1234", "https://example.test/device"
+		if f.userCode != "" {
+			uc, vu = f.userCode, f.verifyURI
+		}
+		json.NewEncoder(w).Encode(map[string]any{"device_code": "dc", "user_code": uc, "verification_uri": vu, "interval": 1, "expires_in": 900})
 	})
 	mux.HandleFunc("POST /v1/auth/token", func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
@@ -73,7 +81,11 @@ func newFakeRegistry(t *testing.T) *fakeRegistry {
 		f.mu.Unlock()
 		if code != 0 {
 			w.WriteHeader(code)
-			io.WriteString(w, `{"error":"version already exists"}`)
+			msg := f.pushMsg
+			if msg == "" {
+				msg = "version already exists"
+			}
+			json.NewEncoder(w).Encode(map[string]string{"error": msg})
 			return
 		}
 		w.WriteHeader(201)
@@ -103,6 +115,9 @@ func newFakeRegistry(t *testing.T) *fakeRegistry {
 		out := map[string]any{"version": pick, "digest": "", "yanked": fv.yanked}
 		if fv.yanked {
 			out["warning"] = "yanked"
+		}
+		if f.forceVersion != "" {
+			out["version"] = f.forceVersion
 		}
 		json.NewEncoder(w).Encode(out)
 	})

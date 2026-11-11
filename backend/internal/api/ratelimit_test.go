@@ -56,17 +56,17 @@ func TestClientIP(t *testing.T) {
 	r := httptest.NewRequest("GET", "/", nil)
 	r.RemoteAddr = "1.2.3.4:5555"
 	r.Header.Set("X-Forwarded-For", "9.9.9.9, 8.8.8.8")
-	if got := clientIP(r, false); got != "1.2.3.4" {
+	if got := clientIP(r, false, ""); got != "1.2.3.4" {
 		t.Fatalf("untrusted: %s", got)
 	}
-	if got := clientIP(r, true); got != "8.8.8.8" {
+	if got := clientIP(r, true, ""); got != "8.8.8.8" {
 		t.Fatalf("trusted: %s", got)
 	}
 }
 
 func TestLimitByIPRetryAfter(t *testing.T) {
 	l := NewLimiter(1, time.Minute, nil)
-	h := LimitByIP(l, false, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	h := LimitByIP(l, false, "", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	do := func() *httptest.ResponseRecorder {
 		r := httptest.NewRequest("POST", "/", nil)
 		r.RemoteAddr = "1.2.3.4:1"
@@ -80,5 +80,34 @@ func TestLimitByIPRetryAfter(t *testing.T) {
 	w := do()
 	if w.Code != 429 || w.Header().Get("Retry-After") == "" {
 		t.Fatalf("%d %v", w.Code, w.Header())
+	}
+}
+
+func TestClientIPHeader(t *testing.T) {
+	r := httptest.NewRequest("GET", "/", nil)
+	r.RemoteAddr = "1.2.3.4:5555"
+	r.Header.Set("X-Forwarded-For", "9.9.9.9, 8.8.8.8")
+	r.Header.Set("CF-Connecting-IP", "203.0.113.7")
+	if got := clientIP(r, true, "CF-Connecting-IP"); got != "203.0.113.7" {
+		t.Fatalf("header wins: %s", got)
+	}
+	if got := clientIP(r, false, "CF-Connecting-IP"); got != "203.0.113.7" {
+		t.Fatalf("header independent of trustProxy: %s", got)
+	}
+	if got := clientIP(r, true, ""); got != "8.8.8.8" {
+		t.Fatalf("unset keeps XFF behaviour: %s", got)
+	}
+	for _, bad := range []string{"", "not-an-ip", "1.2.3.4, 5.6.7.8", "<script>"} {
+		r.Header.Set("CF-Connecting-IP", bad)
+		if got := clientIP(r, true, "CF-Connecting-IP"); got != "8.8.8.8" {
+			t.Fatalf("bad value %q must fall back: %s", bad, got)
+		}
+		if got := clientIP(r, false, "CF-Connecting-IP"); got != "1.2.3.4" {
+			t.Fatalf("bad value %q must fall back: %s", bad, got)
+		}
+	}
+	r.Header.Set("CF-Connecting-IP", "2001:db8::1")
+	if got := clientIP(r, false, "CF-Connecting-IP"); got != "2001:db8::1" {
+		t.Fatalf("ipv6: %s", got)
 	}
 }

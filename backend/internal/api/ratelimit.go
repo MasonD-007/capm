@@ -4,6 +4,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -77,8 +78,16 @@ func tooMany(w http.ResponseWriter, retry time.Duration) {
 // clientIP derives the caller's IP from r.RemoteAddr. X-Forwarded-For is
 // attacker-controlled unless a trusted reverse proxy sets it, so it is only
 // consulted (rightmost entry, the one our proxy appended) when trustProxy is
-// true (TRUSTED_PROXY=true).
-func clientIP(r *http.Request, trustProxy bool) string {
+// true (TRUSTED_PROXY=true). If ipHeader is set (CLIENT_IP_HEADER) and holds a
+// single valid IP, that wins; the header is trusted blindly, so it is only safe
+// when the backend is reachable solely through the proxy that sets it. A
+// missing or malformed value falls through to the logic above.
+func clientIP(r *http.Request, trustProxy bool, ipHeader string) string {
+	if ipHeader != "" {
+		if v := strings.TrimSpace(r.Header.Get(ipHeader)); net.ParseIP(v) != nil {
+			return v
+		}
+	}
 	if trustProxy {
 		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 			parts := splitComma(xff)
@@ -114,9 +123,9 @@ func splitComma(s string) []string {
 }
 
 // LimitByIP wraps h, rejecting requests over the per-IP limit with 429.
-func LimitByIP(l *Limiter, trustProxy bool, h http.Handler) http.Handler {
+func LimitByIP(l *Limiter, trustProxy bool, ipHeader string, h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if ok, retry := l.Allow(clientIP(r, trustProxy)); !ok {
+		if ok, retry := l.Allow(clientIP(r, trustProxy, ipHeader)); !ok {
 			tooMany(w, retry)
 			return
 		}

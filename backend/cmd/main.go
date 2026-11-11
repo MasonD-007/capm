@@ -63,9 +63,10 @@ func main() {
 		PublishPerHour: envInt("PUBLISH_RATE_PER_HOUR", 30),
 	})
 	// The unauthenticated auth routes proxy to GitHub, so limit them per IP.
-	// X-Forwarded-For is only honoured when TRUSTED_PROXY=true.
+	// X-Forwarded-For is only honoured when TRUSTED_PROXY=true; CLIENT_IP_HEADER
+	// (e.g. CF-Connecting-IP) takes precedence when set and valid.
 	authLim := api.NewLimiter(envInt("AUTH_RATE_PER_MINUTE", 30), time.Minute, nil)
-	authH := api.LimitByIP(authLim, os.Getenv("TRUSTED_PROXY") == "true", authSvc.Handler())
+	authH := api.LimitByIP(authLim, os.Getenv("TRUSTED_PROXY") == "true", os.Getenv("CLIENT_IP_HEADER"), authSvc.Handler())
 
 	mux := http.NewServeMux()
 	mux.Handle("/v1/auth/", authH)

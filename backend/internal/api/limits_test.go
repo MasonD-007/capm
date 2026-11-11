@@ -233,7 +233,7 @@ func TestAuthRoutesLimitedPerIP(t *testing.T) {
 	ok := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})
 	for _, trust := range []bool{false, true} {
 		l := NewLimiter(2, time.Minute, nil)
-		h := LimitByIP(l, trust, ok)
+		h := LimitByIP(l, trust, "", ok)
 		do := func(remote, xff string) int {
 			r := httptest.NewRequest("POST", "/v1/auth/device", nil)
 			r.RemoteAddr = remote

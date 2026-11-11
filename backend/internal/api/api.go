@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/MasonD-007/capm/backend/internal/store"
 	"github.com/MasonD-007/capm/manifest"
@@ -89,6 +90,9 @@ func internal(w http.ResponseWriter, err error) {
 	writeErr(w, http.StatusInternalServerError, "internal error")
 }
 
+// maxSearchLen caps the q parameter of the list endpoint, in characters.
+const maxSearchLen = 100
+
 func (a *API) list(w http.ResponseWriter, r *http.Request) {
 	limit, offset := 50, 0
 	q := r.URL.Query()
@@ -108,9 +112,10 @@ func (a *API) list(w http.ResponseWriter, r *http.Request) {
 		}
 		offset = n
 	}
-	bs, err := a.store.List(limit, offset)
-	if err != nil {
-		internal(w, err)
+	owner := q.Get("owner")
+	text := strings.TrimSpace(q.Get("q"))
+	if utf8.RuneCountInString(text) > maxSearchLen {
+		writeErr(w, 400, "q must be at most 100 characters")
 		return
 	}
 	type item struct {
@@ -124,18 +129,77 @@ func (a *API) list(w http.ResponseWriter, r *http.Request) {
 		// (unverified); empty when Latest is.
 		Description string `json:"description"`
 	}
-	out := make([]item, 0, len(bs))
-	for _, b := range bs {
+	// fill adds the latest installable version and its description.
+	fill := func(b store.Bundle) (item, error) {
 		it := item{Owner: b.Owner, OwnerLogin: b.OwnerLogin, Name: b.Name}
 		vs, err := a.store.Versions(b.OwnerLogin, b.Name)
 		if err != nil {
-			internal(w, err)
-			return
+			return it, err
 		}
 		if v := latestInstallable(vs); v != nil {
 			it.Latest, it.Description = v.Version, v.Manifest.Metadata.Description
 		}
+		return it, nil
+	}
+	out := []item{}
+	if text == "" {
+		bs, err := a.store.ListByOwner(owner, limit, offset)
+		if err != nil {
+			internal(w, err)
+			return
+		}
+		for _, b := range bs {
+			it, err := fill(b)
+			if err != nil {
+				internal(w, err)
+				return
+			}
+			out = append(out, it)
+		}
+		writeJSON(w, 200, out)
+		return
+	}
+	// The description lives in each version's manifest, so a search walks the
+	// (owner-filtered) bundles in order. Owner and name are checked first;
+	// versions are loaded only to check the description of the rest and to
+	// build the items on the requested page. Paging applies to matches, and
+	// the walk stops once the page is full.
+	bs, err := a.store.ListByOwner(owner, -1, 0)
+	if err != nil {
+		internal(w, err)
+		return
+	}
+	needle := strings.ToLower(text)
+	matched := 0
+	for _, b := range bs {
+		var it item
+		filled := false
+		hit := strings.Contains(strings.ToLower(b.OwnerLogin), needle) ||
+			strings.Contains(strings.ToLower(b.Name), needle)
+		if !hit {
+			if it, err = fill(b); err != nil {
+				internal(w, err)
+				return
+			}
+			filled = true
+			hit = strings.Contains(strings.ToLower(it.Description), needle)
+		}
+		if !hit {
+			continue
+		}
+		if matched++; matched <= offset {
+			continue
+		}
+		if !filled {
+			if it, err = fill(b); err != nil {
+				internal(w, err)
+				return
+			}
+		}
 		out = append(out, it)
+		if len(out) == limit {
+			break
+		}
 	}
 	writeJSON(w, 200, out)
 }

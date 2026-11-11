@@ -27,6 +27,9 @@ type env struct {
 	tempRoot   string // parent for temp dirs; "" means os.TempDir()
 }
 
+// version is set at build time with -ldflags "-X main.version=<commit>".
+var version = "dev"
+
 const defaultRegistry = "https://capm.masondrake.dev"
 
 func defaultEnv() env {
@@ -51,6 +54,9 @@ Commands:
   pull      Download a bundle and check it against the registry's sha256 digest (bundles are not signed)
   inspect   Show the bundle's declared permissions (not enforced; see the egress line)
   run       Launch an agent in a Docker Sandbox (sbx)
+  search    Find bundles whose owner, name or description contains the text
+  list      List bundles in the registry, or only one owner's
+  version   Print the capm version
 
 capm run [--yes] [--workdir DIR] [--model-url URL] [--model-key KEY] [--model NAME]
          [--allow-unenforced-egress] [--allow-global-anthropic-secret] <dir | user/name[@version]>
@@ -87,6 +93,13 @@ func runEnv(args []string, stdout, stderr io.Writer, e env) int {
 		return pull(args[1:], stdout, stderr, e)
 	case "run":
 		return runCmd(args[1:], stdout, stderr, e)
+	case "search":
+		return search(args[1:], stdout, stderr, e)
+	case "list":
+		return list(args[1:], stdout, stderr, e)
+	case "version":
+		fmt.Fprintf(stdout, "capm %s\n", version)
+		return 0
 	default:
 		fmt.Fprintf(stderr, "capm: unknown command %q\n\n%s", args[0], usage)
 		return 2

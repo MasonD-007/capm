@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -57,6 +58,15 @@ type VersionInfo struct {
 	Digest    string    `json:"digest"`
 	Yanked    bool      `json:"yanked"`
 	CreatedAt time.Time `json:"createdAt"`
+}
+
+// BundleInfo is one entry of GET /v1/bundles. Latest is empty when every
+// version is yanked; Description belongs to Latest and is unverified.
+type BundleInfo struct {
+	Owner       string `json:"owner"`
+	Name        string `json:"name"`
+	Latest      string `json:"latest"`
+	Description string `json:"description"`
 }
 
 // Sanitize makes a server-supplied string safe to print on a terminal: C0
@@ -279,4 +289,20 @@ func (c *Client) Versions(owner, name string) ([]VersionInfo, error) {
 	var v []VersionInfo
 	err := c.getJSON("/v1/bundles/"+esc(owner, name), &v)
 	return v, err
+}
+
+// ListBundles returns one page of bundles; q and owner are optional filters.
+func (c *Client) ListBundles(q, owner string, limit, offset int) ([]BundleInfo, error) {
+	v := url.Values{}
+	v.Set("limit", strconv.Itoa(limit))
+	v.Set("offset", strconv.Itoa(offset))
+	if q != "" {
+		v.Set("q", q)
+	}
+	if owner != "" {
+		v.Set("owner", owner)
+	}
+	var out []BundleInfo
+	err := c.getJSON("/v1/bundles?"+v.Encode(), &out)
+	return out, err
 }

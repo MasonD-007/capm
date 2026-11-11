@@ -1,0 +1,47 @@
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency: deploy
+
+jobs:
+  update-manifests:
+    name: Pin released images in k3s manifests
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    env:
+      SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      # ArgoCD syncs k3s/ from main, so pinning the released SHA here is the
+      # deploy. A rollback is a revert of this commit.
+      - name: Pin image tags
+        run: |
+          for f in k3s/apps/backend/deployment.yaml k3s/apps/frontend/deployment.yaml k3s/apps/backup/cronjob.yaml; do
+            sed -i -E "s|(image: ghcr.io/masond-007/capm/[a-z]+):.*|\1:${SHA}|" "$f"
+            grep -q "image: ghcr.io/masond-007/capm/[a-z]*:${SHA}$" "$f" || { echo "::error::$f was not pinned to ${SHA}"; exit 1; }
+          done
+
+      # Pushes made with GITHUB_TOKEN do not trigger workflows, and CI ignores
+      # k3s/**, so this commit cannot start another cycle.
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add k3s/apps/backend/deployment.yaml k3s/apps/frontend/deployment.yaml k3s/apps/backup/cronjob.yaml
+          if git diff --staged --quiet; then
+            echo "Already pinned to ${SHA}"
+            exit 0
+          fi
+          git commit -m "chore: deploy ${SHA}"
+          git push origin main

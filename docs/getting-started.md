@@ -74,7 +74,7 @@ make install && make frontend   # Next.js dev server on :3000, reading API_URL (
 ## Use the CLI
 
 ```sh
-export CAPM_REGISTRY=http://localhost:8080   # the default
+export CAPM_REGISTRY=http://localhost:8080   # needed for local development; the default is https://capm.masondrake.dev
 
 capm login                         # GitHub device flow; prints a URL and a code
 capm push ./my-bundle              # publishes <your-login>/<metadata.name>@<metadata.version>
@@ -99,7 +99,7 @@ current directory).
 
 | Variable | Used by | Meaning |
 |---|---|---|
-| `CAPM_REGISTRY` | all | registry base URL (default `http://localhost:8080`) |
+| `CAPM_REGISTRY` | all | registry base URL (default `https://capm.masondrake.dev`; set `http://localhost:8080` for local development) |
 | `CAPM_MODEL_URL` | run | your model endpoint, an https URL on port 443 (or `--model-url`) |
 | `CAPM_MODEL_KEY` | run | key for that endpoint (or `--model-key`, which other processes can see) |
 | `CAPM_MODEL` | run | model id; required for OpenCode (or `--model`) |

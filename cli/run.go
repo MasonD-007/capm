@@ -27,10 +27,12 @@ type env struct {
 	tempRoot   string // parent for temp dirs; "" means os.TempDir()
 }
 
+const defaultRegistry = "https://capm.masondrake.dev"
+
 func defaultEnv() env {
 	e := env{registry: os.Getenv("CAPM_REGISTRY"), sleep: time.Sleep}
 	if e.registry == "" {
-		e.registry = "http://localhost:8080"
+		e.registry = defaultRegistry
 	}
 	if d, err := os.UserConfigDir(); err == nil {
 		e.credDir = filepath.Join(d, "capm")

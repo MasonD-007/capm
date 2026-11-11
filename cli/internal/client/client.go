@@ -40,6 +40,18 @@ type Resolved struct {
 	Warning string `json:"warning,omitempty"`
 }
 
+// Metadata is what GET /v1/bundles/{owner}/{name}/{version} reports about one
+// version. The server also sends a precomputed `summary`; it is deliberately
+// not decoded, because the caller recomputes it from the manifest rather than
+// trusting the registry's rendering.
+type Metadata struct {
+	Version   string            `json:"version"`
+	Digest    string            `json:"digest"`
+	Yanked    bool              `json:"yanked"`
+	Manifest  manifest.Manifest `json:"manifest"`
+	CreatedAt time.Time         `json:"createdAt"`
+}
+
 type VersionInfo struct {
 	Version   string    `json:"version"`
 	Digest    string    `json:"digest"`
@@ -249,6 +261,14 @@ func (c *Client) Resolve(owner, name, spec string) (Resolved, error) {
 	var r Resolved
 	err := c.getJSON("/v1/bundles/"+esc(owner, name)+"/resolve?range="+url.QueryEscape(spec), &r)
 	return r, err
+}
+
+// Metadata fetches the manifest and digest of an exact version without
+// downloading the bundle.
+func (c *Client) Metadata(owner, name, version string) (Metadata, error) {
+	var m Metadata
+	err := c.getJSON("/v1/bundles/"+esc(owner, name, version), &m)
+	return m, err
 }
 
 func (c *Client) Download(owner, name, version string) ([]byte, error) {

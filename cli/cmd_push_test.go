@@ -1,7 +1,9 @@
 package main
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -25,6 +27,24 @@ type fakeVersion struct {
 	yanked bool
 }
 
+// manifestOf reads the manifest from the first entry of a bundle tarball
+// without unpacking the rest (hostile test tarballs carry bad entries after it).
+func manifestOf(tb []byte) (*manifest.Manifest, error) {
+	gz, err := gzip.NewReader(bytes.NewReader(tb))
+	if err != nil {
+		return nil, err
+	}
+	tr := tar.NewReader(gz)
+	if _, err := tr.Next(); err != nil {
+		return nil, err
+	}
+	data, err := io.ReadAll(tr)
+	if err != nil {
+		return nil, err
+	}
+	return manifest.Parse(data)
+}
+
 // fakeRegistry is an httptest stand-in for the capm backend.
 type fakeRegistry struct {
 	srv *httptest.Server
@@ -43,6 +63,10 @@ type fakeRegistry struct {
 	digest, meLogin     string
 	literalDigest       bool   // send digest as is, even when empty
 	forceVersion        string // override the version resolve reports
+	metaManifest        any    // override the manifest the metadata endpoint reports
+	metaSummary         any    // override the (untrusted) summary the metadata endpoint reports
+	metaVersion         string // override the version the metadata endpoint reports
+	downloads           int    // number of /download calls
 
 	polls int // number of /auth/token calls
 }
@@ -134,8 +158,38 @@ func newFakeRegistry(t *testing.T) *fakeRegistry {
 		}
 		json.NewEncoder(w).Encode(out)
 	})
+	mux.HandleFunc("GET /v1/bundles/{owner}/{name}/{version}", func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		k := r.PathValue("owner") + "/" + r.PathValue("name") + "@" + r.PathValue("version")
+		fv := f.versions[k]
+		if fv == nil {
+			w.WriteHeader(404)
+			io.WriteString(w, `{"error":"version not found"}`)
+			return
+		}
+		m, err := manifestOf(fv.tar)
+		if err != nil {
+			w.WriteHeader(500)
+			return
+		}
+		sum := sha256.Sum256(fv.tar)
+		out := map[string]any{"version": r.PathValue("version"), "digest": "sha256:" + hex.EncodeToString(sum[:]),
+			"yanked": fv.yanked, "manifest": m, "summary": m.EnforcedSummary(), "createdAt": time.Now()}
+		if f.metaManifest != nil {
+			out["manifest"] = f.metaManifest
+		}
+		if f.metaSummary != nil {
+			out["summary"] = f.metaSummary
+		}
+		if f.metaVersion != "" {
+			out["version"] = f.metaVersion
+		}
+		json.NewEncoder(w).Encode(out)
+	})
 	mux.HandleFunc("GET /v1/bundles/{owner}/{name}/{version}/download", func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
+		f.downloads++
 		fv := f.versions[r.PathValue("owner")+"/"+r.PathValue("name")+"@"+r.PathValue("version")]
 		f.mu.Unlock()
 		if fv == nil {

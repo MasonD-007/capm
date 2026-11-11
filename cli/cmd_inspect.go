@@ -45,16 +45,34 @@ func inspect(args []string, stdout, stderr io.Writer, e env) int {
 	return 0
 }
 
+// inspectRemote prints the declared permissions of owner/name@spec from the
+// registry's metadata endpoint, without downloading the bundle. The registry
+// is untrusted, so the manifest is validated here and the summary is computed
+// from it locally; the server's own `summary` field is never used.
 func inspectRemote(owner, name, spec string, stdout, stderr io.Writer, e env) int {
-	m, tmp, res, err := fetchToTemp(e, owner, name, spec, "", "capm-inspect-*")
-	if tmp != "" {
-		defer os.RemoveAll(tmp)
-	}
+	c := client.New(e.registry, "")
+	res, err := resolveChecked(c, owner, name, spec)
 	if err != nil {
 		fmt.Fprintf(stderr, "capm inspect: %v\n", err)
 		return 1
 	}
+	md, err := c.Metadata(owner, name, res.Version)
+	if err != nil {
+		fmt.Fprintf(stderr, "capm inspect: %v\n", err)
+		return 1
+	}
+	m := &md.Manifest
+	if err := m.Validate(); err != nil {
+		fmt.Fprintf(stderr, "capm inspect: registry returned an invalid manifest:\n%s\n", manifest.DisplaySafe(err.Error()))
+		return 1
+	}
+	if md.Version != res.Version || m.Metadata.Name != name || m.Metadata.Version != res.Version {
+		fmt.Fprintf(stderr, "capm inspect: registry metadata does not match %s/%s@%s\n", owner, name, res.Version)
+		return 1
+	}
+	res.Yanked = res.Yanked || md.Yanked
 	fmt.Fprintf(stderr, "inspecting registry %s/%s@%s\n", owner, name, res.Version)
+	fmt.Fprintln(stderr, "note: metadata only; the bundle was not downloaded, so its digest was not checked")
 	warnYanked(stderr, owner, name, res)
 	fmt.Fprint(stdout, m.EnforcedSummary().Render())
 	return 0

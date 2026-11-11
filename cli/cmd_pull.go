@@ -17,17 +17,28 @@ var sha256Re = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 var semverRe = regexp.MustCompile(`^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$`)
 
-// fetch resolves spec and downloads the bundle, checking its sha256 digest.
-func fetch(c *client.Client, owner, name, spec string) ([]byte, client.Resolved, error) {
+// resolveChecked resolves spec ("latest" or an exact version) and rejects a
+// version the registry made up: it must be semver, and an exact pin must come
+// back unchanged.
+func resolveChecked(c *client.Client, owner, name, spec string) (client.Resolved, error) {
 	res, err := c.Resolve(owner, name, spec)
 	if err != nil {
-		return nil, res, err
+		return res, err
 	}
 	if !semverRe.MatchString(res.Version) {
-		return nil, res, fmt.Errorf("registry returned an invalid version %q", client.Sanitize(res.Version))
+		return res, fmt.Errorf("registry returned an invalid version %q", client.Sanitize(res.Version))
 	}
 	if spec != "latest" && res.Version != spec {
-		return nil, res, fmt.Errorf("registry resolved %q to a different version %q", client.Sanitize(spec), client.Sanitize(res.Version))
+		return res, fmt.Errorf("registry resolved %q to a different version %q", client.Sanitize(spec), client.Sanitize(res.Version))
+	}
+	return res, nil
+}
+
+// fetch resolves spec and downloads the bundle, checking its sha256 digest.
+func fetch(c *client.Client, owner, name, spec string) ([]byte, client.Resolved, error) {
+	res, err := resolveChecked(c, owner, name, spec)
+	if err != nil {
+		return nil, res, err
 	}
 	b, err := c.Download(owner, name, res.Version)
 	if err != nil {

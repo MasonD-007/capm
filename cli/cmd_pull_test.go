@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/MasonD-007/capm/manifest"
 )
 
 type hostileCase struct {
@@ -202,24 +204,84 @@ func TestInspectRemoteWritesNothing(t *testing.T) {
 	}
 }
 
-func TestInspectRemoteHostileExit1(t *testing.T) {
-	for _, c := range hostileCases {
+// Remote inspect reads only the registry's metadata: no download, no unpacking.
+func TestInspectRemoteNeverDownloads(t *testing.T) {
+	h := newHarness(t)
+	chdirTemp(t)
+	// A hostile tarball can never be reached because inspect does not fetch it.
+	h.reg.add("bob", "agent", "1.0.0", hostileTar(t, hostileCases[0]), false)
+	if code := h.run("inspect", "bob/agent@1.0.0"); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.errb.String())
+	}
+	if h.reg.downloads != 0 {
+		t.Errorf("inspect downloaded the bundle %d times", h.reg.downloads)
+	}
+	if !strings.Contains(h.errb.String(), "metadata only") {
+		t.Errorf("stderr should say the bundle was not downloaded: %q", h.errb.String())
+	}
+	if ents, _ := os.ReadDir("."); len(ents) != 0 {
+		t.Errorf("cwd not clean: %v", ents)
+	}
+}
+
+// The registry's own `summary` is untrusted: the output is recomputed from the
+// manifest, which is validated locally.
+func TestInspectRemoteIgnoresServerSummary(t *testing.T) {
+	h := newHarness(t)
+	h.reg.add("bob", "agent", "1.0.0", testBundleTar(t, "agent", "1.0.0"), false)
+	h.reg.metaSummary = map[string]any{"egress": []string{"evil.example"}}
+	if code := h.run("inspect", "bob/agent"); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.errb.String())
+	}
+	if strings.Contains(h.out.String(), "evil.example") || !strings.Contains(h.out.String(), "api.github.com") {
+		t.Errorf("output must come from the manifest, not the server summary: %q", h.out.String())
+	}
+}
+
+func TestInspectRemoteRejectsBadMetadata(t *testing.T) {
+	good, err := manifest.Parse([]byte("apiVersion: capm/v0\nkind: Agent\nmetadata: {name: agent, version: 1.0.0}\n" +
+		"base: {agent: claude-code, version: 2.1.292}\ninterface: {type: tty}\n" +
+		"model: {api: openai-compatible, requires: {toolCalling: true, minContextTokens: 1000}}\n" +
+		"permissions: {egress: [api.github.com]}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	with := func(f func(m *manifest.Manifest)) *manifest.Manifest {
+		m := *good
+		f(&m)
+		return &m
+	}
+	cases := []struct {
+		name string
+		set  func(h *harness)
+		want string
+	}{
+		{"invalid manifest", func(h *harness) {
+			h.reg.metaManifest = with(func(m *manifest.Manifest) { m.Permissions.Egress = []string{"*.evil.example"} })
+		}, "invalid manifest"},
+		{"escape in manifest", func(h *harness) {
+			h.reg.metaManifest = with(func(m *manifest.Manifest) { m.Metadata.Description = escape })
+		}, "invalid manifest"},
+		{"name mismatch", func(h *harness) {
+			h.reg.metaManifest = with(func(m *manifest.Manifest) { m.Metadata.Name = "other" })
+		}, "does not match"},
+		{"version mismatch", func(h *harness) { h.reg.metaVersion = "9.9.9" }, "does not match"},
+	}
+	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			h := newHarness(t)
-			root := chdirTemp(t)
-			h.reg.add("bob", "agent", "1.0.0", hostileTar(t, c), false)
+			h.reg.add("bob", "agent", "1.0.0", testBundleTar(t, "agent", "1.0.0"), false)
+			c.set(h)
 			if code := h.run("inspect", "bob/agent@1.0.0"); code != 1 {
 				t.Fatalf("exit %d", code)
 			}
 			if !strings.Contains(h.errb.String(), c.want) {
-				t.Errorf("stderr should name %q: %q", c.want, h.errb.String())
+				t.Errorf("stderr should contain %q: %q", c.want, h.errb.String())
 			}
-			if ents, _ := os.ReadDir(root); len(ents) != 1 || ents[0].Name() != "work" {
-				t.Errorf("wrote outside cwd: %v", ents)
+			if h.out.Len() != 0 {
+				t.Errorf("nothing should be rendered for bad metadata: %q", h.out.String())
 			}
-			if ents, _ := os.ReadDir("."); len(ents) != 0 {
-				t.Errorf("cwd not clean: %v", ents)
-			}
+			assertClean(t, h)
 		})
 	}
 }
@@ -308,14 +370,14 @@ func TestHostileDigestSanitized(t *testing.T) {
 	chdirTemp(t)
 	h.reg.add("bob", "agent", "1.0.0", testBundleTar(t, "agent", "1.0.0"), false)
 	h.reg.digest = "sha256:" + escape
-	for _, args := range [][]string{{"pull", "bob/agent"}, {"inspect", "bob/agent"}} {
-		if code := h.run(args...); code != 1 {
-			t.Fatalf("%v: exit %d, want 1", args, code)
-		}
-		assertClean(t, h)
-		if !strings.Contains(h.errb.String(), "digest") || !strings.Contains(h.errb.String(), "sha256:[2JFAKE") {
-			t.Errorf("sanitized text missing: %q", h.errb.String())
-		}
+	// Only commands that download the bundle check its digest; inspect reads
+	// metadata alone (see TestInspectRemoteNeverDownloads).
+	if code := h.run("pull", "bob/agent"); code != 1 {
+		t.Fatalf("exit %d, want 1", code)
+	}
+	assertClean(t, h)
+	if !strings.Contains(h.errb.String(), "digest") || !strings.Contains(h.errb.String(), "sha256:[2JFAKE") {
+		t.Errorf("sanitized text missing: %q", h.errb.String())
 	}
 	if ents, _ := os.ReadDir("."); len(ents) != 0 {
 		t.Errorf("cwd not clean: %v", ents)
@@ -341,13 +403,12 @@ func TestMissingOrForeignDigestRefused(t *testing.T) {
 		chdirTemp(t)
 		h.reg.add("bob", "agent", "1.0.0", testBundleTar(t, "agent", "1.0.0"), false)
 		h.reg.digest, h.reg.literalDigest = d, true
-		for _, args := range [][]string{{"pull", "bob/agent"}, {"inspect", "bob/agent"}} {
-			if code := h.run(args...); code != 1 {
-				t.Errorf("digest %q %v: exit %d, want 1", d, args, code)
-			}
-			if !strings.Contains(h.errb.String(), "digest") {
-				t.Errorf("digest %q %v: stderr %q", d, args, h.errb.String())
-			}
+		// pull downloads the bundle, so it must verify it; inspect reads metadata only.
+		if code := h.run("pull", "bob/agent"); code != 1 {
+			t.Errorf("digest %q: exit %d, want 1", d, code)
+		}
+		if !strings.Contains(h.errb.String(), "digest") {
+			t.Errorf("digest %q: stderr %q", d, h.errb.String())
 		}
 		if ents, _ := os.ReadDir("."); len(ents) != 0 {
 			t.Errorf("cwd not clean: %v", ents)

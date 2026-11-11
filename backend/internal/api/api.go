@@ -49,6 +49,7 @@ func (a *API) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/bundles", a.list)
 	mux.HandleFunc("GET /v1/bundles/{owner}/{name}", a.versions)
+	mux.HandleFunc("GET /v1/bundles/{owner}/{name}/{version}", a.metadata)
 	mux.HandleFunc("GET /v1/bundles/{owner}/{name}/{version}/download", a.download)
 	mux.HandleFunc("GET /v1/bundles/{owner}/{name}/resolve", a.resolve)
 	mux.HandleFunc("PUT /v1/bundles/{owner}/{name}/{version}", a.publish)
@@ -162,6 +163,32 @@ func (a *API) versions(w http.ResponseWriter, r *http.Request) {
 		out = append(out, item{v.Version, v.Digest, v.Yanked, v.Manifest, v.Manifest.EnforcedSummary(), v.CreatedAt})
 	}
 	writeJSON(w, 200, out)
+}
+
+// metadata returns the manifest, summary, digest and yanked flag for one exact
+// version, so a client can inspect a bundle without downloading it. Unlike
+// /resolve it does not accept "latest"; callers resolve a version first.
+func (a *API) metadata(w http.ResponseWriter, r *http.Request) {
+	vs, err := a.store.Versions(r.PathValue("owner"), r.PathValue("name"))
+	if errors.Is(err, store.ErrNotFound) {
+		writeErr(w, 404, "bundle not found")
+		return
+	}
+	if err != nil {
+		internal(w, err)
+		return
+	}
+	var pick *store.Version
+	for i := range vs {
+		if vs[i].Version == r.PathValue("version") {
+			pick = &vs[i]
+		}
+	}
+	if pick == nil {
+		writeErr(w, 404, "version not found")
+		return
+	}
+	writeJSON(w, 200, map[string]any{"version": pick.Version, "digest": pick.Digest, "yanked": pick.Yanked, "manifest": pick.Manifest, "summary": pick.Manifest.EnforcedSummary(), "createdAt": pick.CreatedAt})
 }
 
 func (a *API) download(w http.ResponseWriter, r *http.Request) {

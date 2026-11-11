@@ -1,0 +1,16 @@
+# Used when something builds with the repo root as the context and no
+# Dockerfile-specific ignore file is honoured (for example the Terraform
+# Docker provider). `docker compose` still prefers backend/Dockerfile.dockerignore.
+.git
+.github
+.superpowers
+bin
+docs
+terraform
+cli
+frontend
+**/node_modules
+**/.next
+**/.env
+**/data
+**/*.test

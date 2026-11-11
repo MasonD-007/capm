@@ -114,3 +114,33 @@ Also unverified: the `--skills off` spelling's effect, cleanup of capm's
 per-run sbx secrets and MCP registrations (a killed `capm run` can leave
 `capm-*` registrations behind; remove them with `sbx mcp rm` and
 `sbx secret rm`).
+
+## The public deployment
+
+The registry at `https://capm.masondrake.dev` is open to the internet, and
+anyone with a GitHub account can publish. That sharpens several of the points
+above. Operating procedures are in [self-hosting.md](self-hosting.md).
+
+- **Tokens cannot be revoked, and that matters more here.** A leaked token
+  stays valid forever, and there are no admin endpoints to remove a malicious
+  bundle or ban a publisher. The only remedy is the takedown runbook in
+  [self-hosting.md](self-hosting.md): stop the backend and edit the SQLite
+  database by hand (yank or delete a version, delete a user's tokens). Deleting
+  tokens does not keep the person out, since any GitHub account can log in
+  again. Treat every bundle from an unknown publisher as untrusted; yanking
+  does not stop pulls of an exact version.
+- **`CLIENT_IP_HEADER` is trusted blindly.** If set (for example to
+  `CF-Connecting-IP`), the backend rate-limits on whatever IP that header
+  holds, with no check on who sent it. It is safe only if every request
+  reaches the backend through the proxy that sets the header. Cloudflare does
+  set it, but anyone who can reach Traefik directly on the LAN
+  (`10.0.10.19:80`) with the right `Host` header can send the header
+  themselves and pick any IP, evading the per-IP auth limits. A missing or
+  malformed value falls back to the `X-Forwarded-For` logic, so only a
+  well-formed spoofed IP works. Leave it unset unless a header check showed
+  the default logic puts all visitors in one bucket.
+- **Backups hold everything.** Nightly snapshots in R2 contain the full
+  database, including token hashes. They are encrypted with the restic
+  password, which is not stored in the cluster in plain form; keep it
+  elsewhere. Removing a bundle from the live registry does not remove it from
+  old snapshots.

@@ -12,9 +12,18 @@ read -r -p "Cloudflare account ID: " account
 read -r -p "R2 bucket name: " bucket
 read -r -s -p "R2 access key ID: " key; echo
 read -r -s -p "R2 secret access key: " secret; echo
-read -r -s -p "restic password (keep a copy outside the cluster): " pass; echo
-read -r -s -p "restic password again: " pass2; echo
-[ "$pass" = "$pass2" ] || { echo "restic passwords differ" >&2; exit 1; }
+# The restic password is not an account anywhere: it is a passphrase you
+# choose, and it encrypts the backups. Leave it blank to have one generated
+# and saved in the macOS login Keychain (never printed).
+read -r -s -p "restic password (blank = generate and save to Keychain): " pass; echo
+if [ -z "$pass" ]; then
+  pass="$(openssl rand -base64 32)"
+  security add-generic-password -U -a capm -s capm-restic-password -w "$pass"
+  echo "generated; read it back with: security find-generic-password -a capm -s capm-restic-password -w"
+else
+  read -r -s -p "restic password again: " pass2; echo
+  [ "$pass" = "$pass2" ] || { echo "restic passwords differ" >&2; exit 1; }
+fi
 for v in account bucket key secret pass; do
   [ -n "${!v}" ] || { echo "$v is empty" >&2; exit 1; }
 done

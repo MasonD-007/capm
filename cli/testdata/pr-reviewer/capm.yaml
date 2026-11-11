@@ -1,0 +1,31 @@
+apiVersion: capm/v0
+kind: Agent
+metadata:
+  name: pr-reviewer
+  version: 0.1.0
+  description: Reviews open pull requests and leaves comments.
+  authors: [MasonD-007]
+base:
+  agent: claude-code
+  version: 2.1.292
+interface:
+  type: tty
+model:
+  api: openai-compatible
+  requires:
+    toolCalling: true
+    minContextTokens: 32000
+permissions:
+  egress: [api.github.com]
+  mounts:
+    - path: ./workspace
+      mode: read-only
+secrets:
+  - name: GITHUB_TOKEN
+    description: Token used to read pull requests
+mcp:
+  - name: gh
+    url: https://mcp.example.com/mcp
+    secret: GITHUB_TOKEN
+context:
+  - prompts/review.md

@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: capm-data
+  namespace: capm
+  annotations:
+    # Every published bundle lives here. Neither a prune nor deleting the
+    # Application may remove it (local-path reclaim policy is Delete).
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      # local-path does not enforce this; CapmDataVolumeFilling alerts at 4Gi.
+      storage: 5Gi

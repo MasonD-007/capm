@@ -1,0 +1,115 @@
+# Getting started with capm v1
+
+capm is a registry for agent bundles: a `capm.yaml` manifest plus optional
+context files, run on a base agent (Claude Code or OpenCode) inside a Docker
+Sandbox (`sbx`). This page covers running the registry locally and using the
+CLI. Read [security-notes.md](security-notes.md) before running anyone
+else's bundle.
+
+## Prerequisites
+
+- Go 1.27.3 or newer (the version in `go.work` and each `go.mod`)
+- Node.js 22 and npm (frontend)
+- Docker with Compose v2.24 or newer, only for `make up`
+- `sbx` (Docker Sandboxes) v0.48 or newer, signed in with `sbx login`, only
+  for `capm run`. capm's sbx integration has not been run against a real
+  sandbox yet; see [sbx-findings.md](sbx-findings.md).
+- A GitHub account, to publish
+
+## Build
+
+```sh
+make build        # bin/capm-backend, bin/capm, and a production frontend build
+```
+
+The three Go modules (`manifest`, `backend`, `cli`) are tied together by
+`go.work` and `replace ../manifest` directives, so `go install
+github.com/MasonD-007/capm/cli@latest` does **not** work. Build from a clone
+and put `bin/capm` on your `PATH`.
+
+## Create a GitHub OAuth app (for logins)
+
+The registry signs publishers in with GitHub's device flow. Pulling needs no
+account.
+
+1. GitHub, Settings, Developer settings, OAuth Apps, New OAuth App. Any
+   homepage and callback URL will do (for example `http://localhost:3000`);
+   the device flow does not use the callback.
+2. Tick **Enable Device Flow** and save.
+3. Copy the **Client ID**. No client secret is needed.
+
+## Run the registry
+
+Copy `backend/.env.example` to `backend/.env` and set at least
+`GITHUB_CLIENT_ID`. Without it, `/v1/auth/*` returns 503 and nobody can log in.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `GITHUB_CLIENT_ID` | (none) | OAuth app client ID, Device Flow enabled |
+| `GITHUB_API_URL` | `https://api.github.com` | GitHub REST base (tests, Enterprise) |
+| `GITHUB_OAUTH_URL` | `https://github.com` | GitHub OAuth base (tests, Enterprise) |
+| `PORT` | `8080` | listen port (compose fixes it to 8080) |
+| `DATA_DIR` | `./data` | database and bundle storage (compose fixes it to `/data`) |
+| `MAX_BUNDLE_BYTES` | `5242880` | largest accepted upload |
+| `PUBLISH_RATE_PER_HOUR` | `30` | publishes per user per hour |
+| `AUTH_RATE_PER_MINUTE` | `30` | auth requests per client IP per minute |
+| `TRUSTED_PROXY` | `false` | trust `X-Forwarded-For`; only behind a proxy that sets it |
+
+Then either:
+
+```sh
+make up           # docker compose: backend on :8080, website on :3000
+```
+
+Compose reads `backend/.env` at run time (it is never copied into the image).
+Variables exported in your shell are not forwarded; put them in the file.
+
+or, without Docker:
+
+```sh
+make backend      # builds and runs bin/capm-backend from backend/ (reads backend/.env, data in backend/data)
+make install && make frontend   # Next.js dev server on :3000, reading API_URL (default http://localhost:8080)
+```
+
+## Use the CLI
+
+```sh
+export CAPM_REGISTRY=http://localhost:8080   # needed for local development; the default is https://capm.masondrake.dev
+
+capm login                         # GitHub device flow; prints a URL and a code
+capm push ./my-bundle              # publishes <your-login>/<metadata.name>@<metadata.version>
+capm inspect alice/pr-reviewer@0.1.0   # declared permissions, without installing
+capm pull alice/pr-reviewer@0.1.0  # unpacks into ./pr-reviewer after checking the sha256 digest
+capm run alice/pr-reviewer@0.1.0 --model-url https://models.example.com --allow-unenforced-egress
+```
+
+`inspect` and `run` also take a local bundle directory. Omitting `@version`
+means the latest non-yanked version. Always pin the version you inspected:
+the latest version can change between `inspect` and `run`.
+
+`capm run` shows the declared permissions and its run plan, asks you to
+confirm (`--yes` skips the question), then drives sbx. Today it always needs
+`--allow-unenforced-egress`, because capm cannot restrict the sandbox to the
+listed hosts (see the security notes). It also refuses while a global sbx
+`anthropic` secret is stored, unless you pass `--allow-global-anthropic-secret`.
+Mount paths in the manifest are resolved under `--workdir` (default: the
+current directory).
+
+### Environment variables the CLI reads
+
+| Variable | Used by | Meaning |
+|---|---|---|
+| `CAPM_REGISTRY` | all | registry base URL (default `https://capm.masondrake.dev`; set `http://localhost:8080` for local development) |
+| `CAPM_MODEL_URL` | run | your model endpoint, an https URL on port 443 (or `--model-url`) |
+| `CAPM_MODEL_KEY` | run | key for that endpoint (or `--model-key`, which other processes can see) |
+| `CAPM_MODEL` | run | model id; required for OpenCode (or `--model`) |
+| `CAPM_SECRET_<NAME>` | run | value for the bundle's declared secret `NAME` |
+
+Secret values come from `CAPM_SECRET_<NAME>` or, on a terminal, a hidden
+prompt. capm does **not** read them from the sbx secret store. They are
+written to a 0600 file in a capm temp directory for sbx to read and removed
+when the run ends.
+
+Credentials from `capm login` are stored in your user config directory
+(`~/Library/Application Support/capm/credentials.json` on macOS,
+`~/.config/capm/credentials.json` on Linux).

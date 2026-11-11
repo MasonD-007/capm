@@ -1,0 +1,33 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: capm
+  namespace: capm
+  labels:
+    # Matches the cluster Prometheus ruleSelector.
+    release: prometheus
+spec:
+  groups:
+    - name: capm
+      rules:
+        - alert: CapmDataVolumeFilling
+          expr: kubelet_volume_stats_used_bytes{namespace="capm",persistentvolumeclaim="capm-data"} > 4 * 1024^3
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: capm data volume is over 4 GiB
+            description: local-path does not enforce the 5Gi request, and the node disk is shared with other apps' databases.
+        - alert: CapmBackupStale
+          expr: time() - kube_cronjob_status_last_successful_time{namespace="capm",cronjob="capm-backup"} > 36 * 3600
+          labels:
+            severity: critical
+          annotations:
+            summary: capm backup has not succeeded in 36 hours
+        - alert: CapmBackupNeverSucceeded
+          expr: absent(kube_cronjob_status_last_successful_time{namespace="capm",cronjob="capm-backup"})
+          for: 36h
+          labels:
+            severity: critical
+          annotations:
+            summary: capm backup has never succeeded

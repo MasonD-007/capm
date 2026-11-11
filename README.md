@@ -2,7 +2,7 @@
 
 **Share AI agents the way you share packages. Run them in a sandbox that enforces exactly what they declare.**
 
-> **Status: early design.** Nothing here is implemented yet. This README describes the intended design and the v0 manifest spec. Expect breaking changes.
+> **Status: v1 registry is live** at <https://capm.masondrake.dev>. See [docs/getting-started.md](docs/getting-started.md) to publish and pull bundles, and [docs/security-notes.md](docs/security-notes.md) for what v1 does and does not protect you from. Parts of this README still describe the intended design rather than what v1 does. Expect breaking changes.
 
 ## The problem
 

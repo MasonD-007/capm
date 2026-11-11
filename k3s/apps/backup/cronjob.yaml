@@ -1,0 +1,74 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: capm-backup
+  namespace: capm
+  labels:
+    app: capm-backup
+spec:
+  schedule: "30 3 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            app: capm-backup
+        spec:
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            fsGroup: 65532
+          containers:
+            - name: backup
+              # Tag is rewritten to the released commit SHA by .github/workflows/deploy.yml.
+              image: ghcr.io/masond-007/capm/backup:0000000000000000000000000000000000000000
+              env:
+                - name: DATA_DIR
+                  value: /data
+                - name: SCRATCH_DIR
+                  value: /scratch
+                - name: RESTIC_CACHE_DIR
+                  value: /cache
+              envFrom:
+                # RESTIC_REPOSITORY, RESTIC_PASSWORD, AWS_ACCESS_KEY_ID,
+                # AWS_SECRET_ACCESS_KEY (sealed-secret.yaml).
+                - secretRef:
+                    name: backup-secrets
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  memory: 512Mi
+              volumeMounts:
+                # Read-write only because SQLite's online backup needs the WAL
+                # shared-memory file; the script writes to /scratch alone.
+                - name: data
+                  mountPath: /data
+                - name: scratch
+                  mountPath: /scratch
+                - name: cache
+                  mountPath: /cache
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: data
+              persistentVolumeClaim:
+                claimName: capm-data
+            - name: scratch
+              emptyDir: {}
+            - name: cache
+              emptyDir: {}
+            - name: tmp
+              emptyDir: {}

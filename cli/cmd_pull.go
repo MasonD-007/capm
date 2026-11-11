@@ -1,0 +1,113 @@
+package main
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"os"
+	"regexp"
+	"strings"
+
+	"github.com/MasonD-007/capm/cli/internal/client"
+	"github.com/MasonD-007/capm/manifest"
+)
+
+var sha256Re = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+var semverRe = regexp.MustCompile(`^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$`)
+
+// resolveChecked resolves spec ("latest" or an exact version) and rejects a
+// version the registry made up: it must be semver, and an exact pin must come
+// back unchanged.
+func resolveChecked(c *client.Client, owner, name, spec string) (client.Resolved, error) {
+	res, err := c.Resolve(owner, name, spec)
+	if err != nil {
+		return res, err
+	}
+	if !semverRe.MatchString(res.Version) {
+		return res, fmt.Errorf("registry returned an invalid version %q", client.Sanitize(res.Version))
+	}
+	if spec != "latest" && res.Version != spec {
+		return res, fmt.Errorf("registry resolved %q to a different version %q", client.Sanitize(spec), client.Sanitize(res.Version))
+	}
+	return res, nil
+}
+
+// fetch resolves spec and downloads the bundle, checking its sha256 digest.
+func fetch(c *client.Client, owner, name, spec string) ([]byte, client.Resolved, error) {
+	res, err := resolveChecked(c, owner, name, spec)
+	if err != nil {
+		return nil, res, err
+	}
+	b, err := c.Download(owner, name, res.Version)
+	if err != nil {
+		return nil, res, err
+	}
+	// No digest, or one capm cannot check, is an error: silently skipping
+	// verification would make a tampered download look verified.
+	want, ok := strings.CutPrefix(res.Digest, "sha256:")
+	if !ok || !sha256Re.MatchString(want) {
+		return nil, res, fmt.Errorf("registry did not supply a sha256 digest for this bundle (got %q); refusing to use it unverified", client.Sanitize(res.Digest))
+	}
+	sum := sha256.Sum256(b)
+	if hex.EncodeToString(sum[:]) != want {
+		return nil, res, fmt.Errorf("downloaded bundle does not match its digest %s", client.Sanitize(res.Digest))
+	}
+	return b, res, nil
+}
+
+func warnYanked(stderr io.Writer, owner, name string, r client.Resolved) {
+	if r.Warning == "yanked" || r.Yanked {
+		fmt.Fprintf(stderr, "warning: %s/%s@%s has been yanked by its owner; use it with care\n", owner, name, r.Version)
+	}
+}
+
+// pull downloads user/name[@version] into ./<name>/.
+func pull(args []string, stdout, stderr io.Writer, e env) int {
+	const use = "usage: capm pull user/name[@version]"
+	if len(args) != 1 {
+		fmt.Fprintln(stderr, use)
+		return 2
+	}
+	owner, name, spec, err := parseRef(args[0])
+	if err != nil {
+		fmt.Fprintf(stderr, "capm pull: %v\n%s\n", err, use)
+		return 2
+	}
+	dest := name
+	if ents, err := os.ReadDir(dest); err == nil {
+		if len(ents) > 0 {
+			fmt.Fprintf(stderr, "capm pull: ./%s already exists and is not empty\n", dest)
+			return 1
+		}
+	} else if !os.IsNotExist(err) {
+		fmt.Fprintf(stderr, "capm pull: ./%s exists and is not a directory\n", dest)
+		return 1
+	}
+	tarball, res, err := fetch(client.New(e.registry, ""), owner, name, spec)
+	if err != nil {
+		fmt.Fprintf(stderr, "capm pull: %v\n", err)
+		return 1
+	}
+	// Unpack beside the destination, then rename, so a failure leaves nothing behind.
+	tmp, err := os.MkdirTemp(".", ".capm-pull-*")
+	if err != nil {
+		fmt.Fprintf(stderr, "capm pull: %v\n", err)
+		return 1
+	}
+	defer os.RemoveAll(tmp)
+	if _, err := manifest.UnpackTo(tarball, tmp); err != nil {
+		fmt.Fprintf(stderr, "capm pull: refusing bundle: %v\n", err)
+		return 1
+	}
+	os.Remove(dest) // succeeds only for an empty directory, which is allowed
+	if err := os.Rename(tmp, dest); err != nil {
+		fmt.Fprintf(stderr, "capm pull: %v\n", err)
+		return 1
+	}
+	os.Chmod(dest, 0o755)
+	warnYanked(stderr, owner, name, res)
+	fmt.Fprintf(stdout, "Pulled %s/%s@%s into ./%s\n", owner, name, res.Version, dest)
+	return 0
+}

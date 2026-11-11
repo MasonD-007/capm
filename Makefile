@@ -5,7 +5,7 @@ ARGS ?=
 
 help:
 	@echo "make backend    run the Go backend"
-	@echo "make cli        run the CLI (ARGS='inspect ./agent.yaml')"
+	@echo "make cli        run the CLI (ARGS='inspect ./agent-dir')"
 	@echo "make frontend   run the Next.js dev server"
 	@echo "make install    install frontend dependencies"
 	@echo "make build      build backend, cli and frontend"
@@ -16,10 +16,10 @@ help:
 
 backend:
 	# build + exec instead of `go run`, which exits 1 when interrupted
-	cd backend && go build -o ../bin/apm-backend ./cmd && PORT=$(BACKEND_PORT) ../bin/apm-backend
+	cd backend && go build -o ../bin/capm-backend ./cmd && PORT=$(BACKEND_PORT) ../bin/capm-backend
 
 cli:
-	cd cli && go run . $(ARGS)
+	go run ./cli $(ARGS)
 
 frontend:
 	cd frontend && npm run dev
@@ -28,8 +28,8 @@ install:
 	cd frontend && npm ci
 
 build:
-	cd backend && go build -o ../bin/apm-backend ./cmd
-	cd cli && go build -o ../bin/apm .
+	cd backend && go build -o ../bin/capm-backend ./cmd
+	cd cli && go build -o ../bin/capm .
 	cd frontend && npm run build
 
 up:

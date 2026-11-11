@@ -1,17 +1,36 @@
 services:
   backend:
-    build: ./backend
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     ports:
       - "8080:8080"
+    # backend/.env (copy backend/.env.example) supplies GITHUB_CLIENT_ID and
+    # the optional settings at run time; it is never copied into the image
+    # (Dockerfile.dockerignore excludes **/.env). Without GITHUB_CLIENT_ID,
+    # /v1/auth/* returns 503 and nobody can log in.
+    env_file:
+      - path: backend/.env
+        required: false
     environment:
+      # These two always win over backend/.env inside the container.
       PORT: "8080"
+      DATA_DIR: /data
+    volumes:
+      - backend-data:/data
 
   frontend:
     build:
       context: ./frontend
       args:
         NEXT_PUBLIC_API_URL: http://localhost:8080
+    environment:
+      # Server-side fetches use the compose network; the browser uses NEXT_PUBLIC_API_URL.
+      API_URL: http://backend:8080
     ports:
       - "3000:3000"
     depends_on:
       - backend
+
+volumes:
+  backend-data:

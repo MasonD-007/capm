@@ -6,6 +6,25 @@ Sandbox (`sbx`). This page covers running the registry locally and using the
 CLI. Read [security-notes.md](security-notes.md) before running anyone
 else's bundle.
 
+## Install
+
+```sh
+curl -fsSL https://capm.masondrake.dev/install.sh | sh
+```
+
+This downloads the latest `capm` release binary for your OS and CPU (macOS or
+Linux, amd64 or arm64) from GitHub Releases, verifies its SHA-256 against the
+release's `checksums.txt`, and installs it to `~/.local/bin/capm`. It never
+uses sudo. Set `CAPM_INSTALL_DIR` to install somewhere else:
+
+```sh
+curl -fsSL https://capm.masondrake.dev/install.sh | CAPM_INSTALL_DIR=/usr/local/bin sh
+```
+
+If the install directory is not on your `PATH`, the script prints the
+`export PATH=...` line to add. Building from source still works; see
+[Build](#build).
+
 ## Prerequisites
 
 - Go 1.27.3 or newer (the version in `go.work` and each `go.mod`)
@@ -78,10 +97,19 @@ export CAPM_REGISTRY=http://localhost:8080   # needed for local development; the
 
 capm login                         # GitHub device flow; prints a URL and a code
 capm push ./my-bundle              # publishes <your-login>/<metadata.name>@<metadata.version>
+capm search reviewer               # bundles whose owner, name or description contains "reviewer"
+capm list alice                    # alice's bundles; without an owner, every bundle
 capm inspect alice/pr-reviewer@0.1.0   # declared permissions, without installing
 capm pull alice/pr-reviewer@0.1.0  # unpacks into ./pr-reviewer after checking the sha256 digest
 capm run alice/pr-reviewer@0.1.0 --model-url https://models.example.com --allow-unenforced-egress
+capm version                       # which build you are running
 ```
+
+`search` and `list` need no login. They print one bundle per line (name, latest
+installable version, first line of its description) and show `-` as the
+version when every version is yanked. Descriptions are written by the
+bundle's author and unverified. Output stops at 2000 bundles; narrow it with
+`search`.
 
 `inspect` and `run` also take a local bundle directory. Omitting `@version`
 means the latest non-yanked version. Always pin the version you inspected:

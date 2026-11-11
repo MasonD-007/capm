@@ -6,14 +6,13 @@ on:
     types: [completed]
     branches: [main]
 
-permissions:
-  contents: read
-  packages: write
-
 jobs:
   build-and-push:
     name: Build and Push Images
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     # Only pushes to main release; a green PR run must not.
     if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' }}
     env:
@@ -69,3 +68,52 @@ jobs:
             ghcr.io/masond-007/capm/backup:latest
           cache-from: type=gha,scope=backup
           cache-to: type=gha,mode=max,scope=backup
+
+  cli:
+    name: Build and Publish CLI
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' }}
+    env:
+      SHA: ${{ github.event.workflow_run.head_sha }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.work
+          cache-dependency-path: '**/go.sum'
+
+      - name: Cross-compile
+        run: |
+          set -eu
+          mkdir -p dist
+          for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
+            os="${target%/*}"
+            arch="${target#*/}"
+            (cd cli && GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 \
+              go build -trimpath -ldflags "-s -w -X main.version=${SHA}" \
+              -o "../dist/capm-${os}-${arch}" .)
+          done
+          (cd dist && sha256sum capm-* > checksums.txt && cat checksums.txt)
+
+      # Safe to re-run for the same SHA: an existing release (possibly left
+      # partial by a failed run) gets its assets replaced as one consistent set.
+      - name: Publish release
+        run: |
+          set -eu
+          if gh release view "cli-${SHA}" >/dev/null 2>&1; then
+            gh release upload "cli-${SHA}" --clobber dist/capm-* dist/checksums.txt
+            exit 0
+          fi
+          gh release create "cli-${SHA}" \
+            --target "${SHA}" \
+            --latest \
+            --title "capm CLI ${SHA:0:7}" \
+            --notes "capm CLI built from ${SHA}. Install: curl -fsSL https://capm.masondrake.dev/install.sh | sh" \
+            dist/capm-darwin-amd64 dist/capm-darwin-arm64 \
+            dist/capm-linux-amd64 dist/capm-linux-arm64 dist/checksums.txt

@@ -10,6 +10,9 @@ export default function Home() {
       <p className="mt-2 text-zinc-600 dark:text-zinc-400">
         A registry for agent bundles. Browse what a bundle declares before you run it.
       </p>
+      <pre className="mt-4 overflow-x-auto rounded bg-zinc-100 p-3 font-mono text-sm dark:bg-zinc-900">
+        <code>curl -fsSL https://capm.masondrake.dev/install.sh | sh</code>
+      </pre>
       <Suspense fallback={<p className="mt-8 text-zinc-500">Loading bundles...</p>}>
         <BundleList />
       </Suspense>

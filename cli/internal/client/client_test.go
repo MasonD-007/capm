@@ -108,3 +108,32 @@ func TestSanitizeDropsBidiAndSeparators(t *testing.T) {
 		t.Errorf("Sanitize(%q) = %q, want abcdefg", in, got)
 	}
 }
+
+func TestListBundlesQueryAndDecode(t *testing.T) {
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.URL.Path + "?" + r.URL.RawQuery
+		io.WriteString(w, `[{"ownerId":1,"owner":"alice","name":"x","latest":"1.0.0","description":"d"}]`)
+	}))
+	defer srv.Close()
+	c := client.New(srv.URL, "")
+
+	bs, err := c.ListBundles("a&b=c d%", "Al ice", 200, 400)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "/v1/bundles?limit=200&offset=400&owner=Al+ice&q=a%26b%3Dc+d%25"; got != want {
+		t.Errorf("request %q, want %q", got, want)
+	}
+	if len(bs) != 1 || bs[0] != (client.BundleInfo{Owner: "alice", Name: "x", Latest: "1.0.0", Description: "d"}) {
+		t.Errorf("decoded %+v", bs)
+	}
+
+	// Empty filters are not sent.
+	if _, err := c.ListBundles("", "", 5, 0); err != nil {
+		t.Fatal(err)
+	}
+	if want := "/v1/bundles?limit=5&offset=0"; got != want {
+		t.Errorf("request %q, want %q", got, want)
+	}
+}

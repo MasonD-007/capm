@@ -244,8 +244,15 @@ func (s *Store) Blob(ownerLogin, name, version string) ([]byte, error) {
 }
 
 func (s *Store) List(limit, offset int) ([]Bundle, error) {
+	return s.ListByOwner("", limit, offset)
+}
+
+// ListByOwner is List restricted to one owner login (case-insensitive exact
+// match); "" means every owner. A negative limit means no limit.
+func (s *Store) ListByOwner(owner string, limit, offset int) ([]Bundle, error) {
 	rows, err := s.db.Query(`SELECT u.id, u.login, b.name FROM bundles b JOIN users u ON u.id = b.owner_id
-		WHERE u.login NOT LIKE '~%' ORDER BY u.login, b.name LIMIT ? OFFSET ?`, limit, offset)
+		WHERE u.login NOT LIKE '~%' AND (? = '' OR u.login = ? COLLATE NOCASE)
+		ORDER BY u.login, b.name LIMIT ? OFFSET ?`, owner, owner, limit, offset)
 	if err != nil {
 		return nil, err
 	}

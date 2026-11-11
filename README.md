@@ -4,6 +4,8 @@
 
 > **Status: v1 registry is live** at <https://capm.masondrake.dev>. See [docs/getting-started.md](docs/getting-started.md) to publish and pull bundles, and [docs/security-notes.md](docs/security-notes.md) for what v1 does and does not protect you from. Parts of this README still describe the intended design rather than what v1 does. Expect breaking changes.
 
+Install the CLI: `curl -fsSL https://capm.masondrake.dev/install.sh | sh`
+
 ## The problem
 
 People are building personal agents to help with their work, and coworkers often hit the same problems those agents solve. But there's no good way to hand an agent to someone else. Configs live in dotfiles, secrets live in `.env` files, the agent assumes a specific model provider, and the person receiving it has no idea what it can touch on their machine.

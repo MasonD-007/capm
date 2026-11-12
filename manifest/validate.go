@@ -7,6 +7,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode"
 )
@@ -81,16 +82,14 @@ func (m *Manifest) Validate() error {
 	if !semverRe.MatchString(m.Metadata.Version) {
 		add("metadata.version %q must be semver", m.Metadata.Version)
 	}
-	switch m.Base.Agent {
-	case "claude-code", "opencode":
-	default:
-		add("base.agent %q must be claude-code or opencode", m.Base.Agent)
+	if !slices.Contains(BaseAgents, m.Base.Agent) {
+		add("base.agent %q must be %s", m.Base.Agent, strings.Join(BaseAgents, " or "))
 	}
 	if m.Interface.Type != "tty" {
 		add("interface.type %q must be tty", m.Interface.Type)
 	}
 	for i, h := range m.Permissions.Egress {
-		if len(h) > 253 || !hostRe.MatchString(h) || !hasAlpha.MatchString(h) {
+		if !ValidHost(h) {
 			add("permissions.egress[%d] %q must be a lowercase hostname", i, h)
 		}
 	}

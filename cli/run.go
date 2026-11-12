@@ -13,9 +13,11 @@ import (
 
 // env carries everything the networked commands need, so tests can inject it.
 type env struct {
-	registry string              // registry base URL
-	credDir  string              // directory holding credentials.json
-	sleep    func(time.Duration) // used while polling for login
+	registry string                 // registry base URL
+	credDir  string                 // directory holding credentials.json
+	sleep    func(time.Duration)    // used while polling for login
+	now      func() time.Time       // nil means time.Now (token expiry warning)
+	hostname func() (string, error) // nil means os.Hostname (names the login token)
 
 	// capm run; nil fields get real defaults (see runDefaults).
 	ctx        context.Context
@@ -50,6 +52,8 @@ Usage:
 
 Commands:
   login     Authenticate with a registry
+  logout    Revoke this machine's token and delete the stored credentials
+  tokens    List your login tokens; "tokens revoke <id>" revokes one
   push      Package and publish an agent to a registry
   pull      Download a bundle and check it against the registry's sha256 digest (bundles are not signed)
   inspect   Show the bundle's declared permissions (not enforced; see the egress line)
@@ -89,6 +93,10 @@ func runEnv(args []string, stdout, stderr io.Writer, e env) int {
 		return inspect(args[1:], stdout, stderr, e)
 	case "login":
 		return login(args[1:], stdout, stderr, e)
+	case "logout":
+		return logout(args[1:], stdout, stderr, e)
+	case "tokens":
+		return tokens(args[1:], stdout, stderr, e)
 	case "push":
 		return push(args[1:], stdout, stderr, e)
 	case "pull":

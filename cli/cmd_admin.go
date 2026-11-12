@@ -19,6 +19,7 @@ Usage:
   capm admin restore <owner/name[@version]>                 undo a removal (fails if the data was already deleted)
   capm admin ban     <login|id> --reason TEXT               block a user and hide their bundles
   capm admin unban   <login|id>                             lift a ban
+  capm admin revoke-tokens <login|id>                       revoke every login token of a user (they must log in again)
   capm admin log                                            show the audit log of admin actions
 
 Admins are GitHub numeric ids configured on the registry (ADMIN_GITHUB_IDS).
@@ -76,7 +77,7 @@ func admin(args []string, stdout, stderr io.Writer, e env) int {
 		return 2
 	}
 	switch sub {
-	case "remove", "restore", "ban", "unban", "log":
+	case "remove", "restore", "ban", "unban", "revoke-tokens", "log":
 	default:
 		fmt.Fprintf(stderr, "capm admin: unknown subcommand %q\n\n%s", client.Sanitize(sub), adminUsage)
 		return 2
@@ -110,6 +111,7 @@ func admin(args []string, stdout, stderr io.Writer, e env) int {
 		fmt.Fprintf(stderr, "capm admin: %v\n", err)
 		return 1
 	}
+	defer warnExpiry(stderr, e, creds)
 	c := client.New(e.registry, creds.Token)
 	what := func() string {
 		if version == "" {
@@ -119,6 +121,7 @@ func admin(args []string, stdout, stderr io.Writer, e env) int {
 	}
 
 	var res client.AdminResult
+	var revoked int
 	switch sub {
 	case "remove":
 		res, err = c.AdminRemove(owner, name, version, reason)
@@ -128,6 +131,8 @@ func admin(args []string, stdout, stderr io.Writer, e env) int {
 		err = c.AdminBan(pos[0], reason)
 	case "unban":
 		err = c.AdminUnban(pos[0])
+	case "revoke-tokens":
+		revoked, err = c.AdminRevokeTokens(pos[0])
 	case "log":
 		var log []client.AdminAction
 		if log, err = c.AdminLog(50); err == nil {
@@ -168,6 +173,8 @@ func admin(args []string, stdout, stderr io.Writer, e env) int {
 		fmt.Fprintf(stdout, "Banned %s\n", client.Sanitize(pos[0]))
 	case "unban":
 		fmt.Fprintf(stdout, "Unbanned %s\n", client.Sanitize(pos[0]))
+	case "revoke-tokens":
+		fmt.Fprintf(stdout, "Revoked %d token(s) for %s\n", revoked, client.Sanitize(pos[0]))
 	}
 	return 0
 }

@@ -41,6 +41,10 @@ export type BundleListItem = {
   risk?: string;
   /** Risk labels of `latest`, computed by the registry from its manifest. Absent on older servers. */
   riskLabels?: RiskLabel[];
+  /** Raw count of download requests over the last 30 UTC days (inflatable; not a trust signal). Absent on older servers. */
+  downloads30d?: number;
+  /** RFC 3339 time of the newest non-removed version; absent when there is none and on older servers. */
+  updatedAt?: string;
 };
 
 /** Mirrors manifest.RiskLabel (manifest/risk.go). `reason` is registry text: render it cleaned. */
@@ -59,6 +63,9 @@ export type BundleVersion = {
   removed?: boolean;
   /** The admin's reason; untrusted text. */
   removedReason?: string;
+  /** Raw all-time and 30-day download request counts (0 when removed). Absent on older servers. */
+  downloads?: number;
+  downloads30d?: number;
   manifest: { metadata: { name: string; version: string; description?: string } };
   summary: Summary;
 };
@@ -110,13 +117,20 @@ async function get<T>(path: string): Promise<T> {
   }
 }
 
-export type ListOptions = { q?: string; owner?: string; limit?: number; offset?: number };
+export type ListOptions = {
+  q?: string;
+  owner?: string;
+  sort?: "name" | "recent" | "downloads";
+  limit?: number;
+  offset?: number;
+};
 
-/** Path and query string for the list endpoint; empty options are left out. */
+/** Path and query string for the list endpoint; empty options and the default order are left out. */
 function listPath(o: ListOptions): string {
   const p = new URLSearchParams();
   if (o.q) p.set("q", o.q);
   if (o.owner) p.set("owner", o.owner);
+  if (o.sort && o.sort !== "name") p.set("sort", o.sort);
   if (o.limit) p.set("limit", String(o.limit));
   if (o.offset) p.set("offset", String(o.offset));
   const s = p.toString();

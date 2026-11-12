@@ -1,6 +1,9 @@
 import Link from "next/link";
 import type { BundleListItem } from "@/lib/api";
+import { formatDate, formatDownloads } from "@/lib/format";
 import { riskDisplay } from "@/lib/risk";
+import { SORT_VIEWS, sortHref } from "@/lib/search";
+import type { SortMode } from "@/lib/search";
 import { clean } from "@/lib/text";
 
 export function ownerHref(owner: string): string {
@@ -41,10 +44,54 @@ export function BundleRows({ bundles }: { bundles: BundleListItem[] }) {
             {b.description && (
               <p className="mt-1 text-zinc-700 dark:text-zinc-300">{clean(b.description)}</p>
             )}
+            <RowStats b={b} />
           </li>
         );
       })}
     </ul>
+  );
+}
+
+/**
+ * Raw 30-day download requests and the last-published date, in the muted row
+ * style. Nothing is shown for a field an older registry did not send. Counts
+ * are not a trust or quality signal (anyone can inflate them).
+ */
+function RowStats({ b }: { b: BundleListItem }) {
+  const downloads = formatDownloads(b.downloads30d);
+  const published = formatDate(b.updatedAt);
+  if (!downloads && !published) return null;
+  return (
+    <p className="mt-1 text-sm text-zinc-500">
+      {downloads && <span>{downloads} (30 days)</span>}
+      {downloads && published && " · "}
+      {published && <span>last published {published}</span>}
+    </p>
+  );
+}
+
+/** The home-page views as plain links; the current one carries aria-current. */
+export function SortNav({ q, sort }: { q: string; sort: SortMode }) {
+  return (
+    <nav aria-label="Sort bundles" className="mt-6 flex flex-wrap gap-x-4 gap-y-2 text-sm">
+      {SORT_VIEWS.map((v) => {
+        const current = v.mode === sort;
+        return (
+          <Link
+            key={v.mode}
+            href={sortHref(q, v.mode)}
+            aria-current={current ? "true" : undefined}
+            className={
+              current
+                ? "rounded px-2 py-1 font-semibold underline underline-offset-4"
+                : "rounded px-2 py-1 text-zinc-600 underline-offset-4 hover:underline dark:text-zinc-400"
+            }
+          >
+            {v.label}
+          </Link>
+        );
+      })}
+    </nav>
   );
 }
 

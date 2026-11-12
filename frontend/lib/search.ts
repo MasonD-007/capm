@@ -33,11 +33,33 @@ export function prevOffset(offset: number): number {
   return Math.max(0, offset - PAGE_SIZE);
 }
 
-/** Home-page URL for a query and offset; q and offset are omitted when empty/zero. */
-export function homeHref(q: string, offset: number): string {
+/** The orders the list endpoint offers; "name" (A to Z) is the default. */
+export type SortMode = "name" | "recent" | "downloads";
+
+/** The home-page views, in display order. Download counts are raw request counts, not a quality signal. */
+export const SORT_VIEWS: { mode: SortMode; label: string }[] = [
+  { mode: "name", label: "A to Z" },
+  { mode: "recent", label: "Recently published" },
+  { mode: "downloads", label: "Most downloaded (30 days)" },
+];
+
+/** The sort query parameter; anything unknown (or absent) is the default order. */
+export function parseSort(raw: Param): SortMode {
+  const s = first(raw);
+  return s === "recent" || s === "downloads" ? s : "name";
+}
+
+/** Home-page URL for a query, offset and order; q, sort and offset are omitted when empty/default/zero. */
+export function homeHref(q: string, offset: number, sort: SortMode = "name"): string {
   const p = new URLSearchParams();
   if (q) p.set("q", q);
+  if (sort !== "name") p.set("sort", sort);
   if (offset > 0) p.set("offset", String(offset));
   const s = p.toString();
   return s ? `/?${s}` : "/";
+}
+
+/** Link that switches the home page to a view, keeping the query and restarting at the first page. */
+export function sortHref(q: string, sort: SortMode): string {
+  return homeHref(q, 0, sort);
 }

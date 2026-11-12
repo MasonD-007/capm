@@ -23,6 +23,7 @@ var migrations = []migration{
 	migrateV1,
 	migrateV2,
 	migrateV3,
+	migrateV4,
 }
 
 // migrateV1 is the schema as it existed before migrations were introduced.
@@ -105,6 +106,23 @@ func migrateV3(tx *sql.Tx) error {
 		}
 	}
 	_, err := tx.Exec(`UPDATE tokens SET expires_at = ?`, exp)
+	return err
+}
+
+// migrateV4 adds storage quotas. versions.size is the byte length of the
+// version's blob; it is nullable because a SQL step cannot see the blob files
+// (NULL = unknown), and Open fills it in afterwards (backfillSizes), also for
+// rows a rolled-back release inserted without it. quota_overrides holds a
+// user's own limits; a NULL column means "use the default".
+func migrateV4(tx *sql.Tx) error {
+	_, err := tx.Exec(`
+ALTER TABLE versions ADD COLUMN size INTEGER;
+CREATE TABLE quota_overrides (
+	user_id     INTEGER PRIMARY KEY,
+	max_bytes   INTEGER,
+	max_bundles INTEGER,
+	updated_at  INTEGER NOT NULL
+);`)
 	return err
 }
 

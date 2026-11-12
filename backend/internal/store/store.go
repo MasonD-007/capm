@@ -78,6 +78,10 @@ func Open(dataDir string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("store: repair token ids: %w", err)
 	}
+	if err := backfillSizes(db, blobs); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("store: backfill sizes: %w", err)
+	}
 	return &Store{db: db, blobsDir: blobs, now: time.Now}, nil
 }
 

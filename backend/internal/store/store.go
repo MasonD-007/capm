@@ -74,6 +74,10 @@ func Open(dataDir string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("store: migrate: %w", err)
 	}
+	if err := repairTokenIDs(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("store: repair token ids: %w", err)
+	}
 	return &Store{db: db, blobsDir: blobs, now: time.Now}, nil
 }
 

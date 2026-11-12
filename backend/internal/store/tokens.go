@@ -59,6 +59,23 @@ func (s *Store) CreateToken(hash []byte, userID int64, name string, expiresAt ti
 	return err
 }
 
+// repairTokenIDs gives an id to token rows that lack one. Only the previous
+// release's CreateToken makes such rows (it does not know the id column), so
+// they appear if the server is rolled back and forward again. Rows are
+// numbered in rowid order, one statement each, so ids stay unique.
+func repairTokenIDs(db *sql.DB) error {
+	for {
+		res, err := db.Exec(`UPDATE tokens SET id = (SELECT COALESCE(MAX(id), 0) + 1 FROM tokens)
+			WHERE rowid = (SELECT MIN(rowid) FROM tokens WHERE id IS NULL)`)
+		if err != nil {
+			return err
+		}
+		if n, err := res.RowsAffected(); err != nil || n == 0 {
+			return err
+		}
+	}
+}
+
 // LookupToken resolves a token hash to its user. Unknown, expired and revoked
 // tokens all give ErrNotFound.
 func (s *Store) LookupToken(hash []byte) (Token, error) {
@@ -67,7 +84,7 @@ func (s *Store) LookupToken(hash []byte) (Token, error) {
 		stored  []byte
 		exp, lu sql.NullInt64
 	)
-	err := s.db.QueryRow(`SELECT u.id, u.login, t.hash, t.id, t.expires_at, t.last_used_at
+	err := s.db.QueryRow(`SELECT u.id, u.login, t.hash, COALESCE(t.id, 0), t.expires_at, t.last_used_at
 		FROM tokens t JOIN users u ON u.id = t.user_id
 		WHERE t.hash = ? AND t.revoked_at IS NULL AND (t.expires_at IS NULL OR t.expires_at > ?)`,
 		hash, s.now().Unix()).Scan(&tk.UserID, &tk.Login, &stored, &tk.ID, &exp, &lu)

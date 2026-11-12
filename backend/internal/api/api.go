@@ -34,6 +34,8 @@ type API struct {
 	authenticate AuthFunc
 	cfg          Config
 	publishLim   *Limiter
+	// countDownload records one successful download; tests replace it.
+	countDownload func(owner, name, version string) error
 }
 
 func New(s *store.Store, auth AuthFunc) *API { return NewWithConfig(s, auth, Config{}) }
@@ -46,7 +48,7 @@ func NewWithConfig(s *store.Store, auth AuthFunc, cfg Config) *API {
 		cfg.PublishPerHour = 30
 	}
 	return &API{store: s, authenticate: auth, cfg: cfg,
-		publishLim: NewLimiter(cfg.PublishPerHour, time.Hour, cfg.Now)}
+		publishLim: NewLimiter(cfg.PublishPerHour, time.Hour, cfg.Now), countDownload: s.CountDownload}
 }
 
 func (a *API) Handler() http.Handler {
@@ -124,6 +126,15 @@ func (a *API) list(w http.ResponseWriter, r *http.Request) {
 		offset = n
 	}
 	owner := q.Get("owner")
+	sortBy := q.Get("sort")
+	switch sortBy {
+	case "":
+		sortBy = store.SortName
+	case store.SortName, store.SortRecent, store.SortDownloads:
+	default:
+		writeErr(w, 400, "sort must be one of: name, recent, downloads")
+		return
+	}
 	text := strings.TrimSpace(q.Get("q"))
 	if utf8.RuneCountInString(text) > maxSearchLen {
 		writeErr(w, 400, "q must be at most 100 characters")
@@ -144,10 +155,21 @@ func (a *API) list(w http.ResponseWriter, r *http.Request) {
 		// severity, "" for none. Clients must recompute from the manifest.
 		RiskLabels []manifest.RiskLabel `json:"riskLabels"`
 		Risk       string               `json:"risk"`
+		// Downloads30d is the raw count of download requests for the bundle's
+		// non-removed versions over the last 30 UTC days. Anyone can inflate
+		// it; it is not a trust or quality signal and never affects search.
+		Downloads30d int64 `json:"downloads30d"`
+		// UpdatedAt is the newest non-removed version's creation time; absent
+		// when the bundle has none.
+		UpdatedAt *time.Time `json:"updatedAt,omitempty"`
 	}
 	// fill adds the latest installable version and its description.
-	fill := func(b store.Bundle) (item, error) {
-		it := item{Owner: b.Owner, OwnerLogin: b.OwnerLogin, Name: b.Name, RiskLabels: []manifest.RiskLabel{}}
+	fill := func(b store.BundleStat) (item, error) {
+		it := item{Owner: b.Owner, OwnerLogin: b.OwnerLogin, Name: b.Name, RiskLabels: []manifest.RiskLabel{}, Downloads30d: b.Downloads30d}
+		if !b.UpdatedAt.IsZero() {
+			u := b.UpdatedAt
+			it.UpdatedAt = &u
+		}
 		vs, err := a.store.Versions(b.OwnerLogin, b.Name)
 		if err != nil {
 			return it, err
@@ -161,7 +183,7 @@ func (a *API) list(w http.ResponseWriter, r *http.Request) {
 	}
 	out := []item{}
 	if text == "" {
-		bs, err := a.store.ListByOwner(owner, limit, offset)
+		bs, err := a.store.ListStats(owner, sortBy, limit, offset)
 		if err != nil {
 			internal(w, err)
 			return
@@ -178,11 +200,13 @@ func (a *API) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The description lives in each version's manifest, so a search walks the
-	// (owner-filtered) bundles in order. Owner and name are checked first;
-	// versions are loaded only to check the description of the rest and to
-	// build the items on the requested page. Paging applies to matches, and
-	// the walk stops once the page is full.
-	bs, err := a.store.ListByOwner(owner, -1, 0)
+	// (owner-filtered) bundles in the requested sort order, which the store
+	// computes without manifests. Owner and name are checked first; versions
+	// are loaded only to check the description of the rest and to build the
+	// items on the requested page. Paging applies to matches in that order,
+	// and the walk stops once the page is full. Counts decide order only,
+	// never whether a bundle matches.
+	bs, err := a.store.ListStats(owner, sortBy, -1, 0)
 	if err != nil {
 		internal(w, err)
 		return
@@ -243,6 +267,15 @@ func (a *API) versions(w http.ResponseWriter, r *http.Request) {
 		// but their manifest is withheld: a takedown may be about its content.
 		Removed       bool   `json:"removed"`
 		RemovedReason string `json:"removedReason"`
+		// Raw request counts (see the list's downloads30d); 0 for a removed
+		// version, whose history is kept but not shown.
+		Downloads    int64 `json:"downloads"`
+		Downloads30d int64 `json:"downloads30d"`
+	}
+	dl, err := a.store.VersionDownloads(r.PathValue("owner"), r.PathValue("name"))
+	if err != nil {
+		internal(w, err)
+		return
 	}
 	out := make([]item, 0, len(vs))
 	for _, v := range vs {
@@ -250,7 +283,7 @@ func (a *API) versions(w http.ResponseWriter, r *http.Request) {
 		if v.Removed {
 			m = manifest.Manifest{}
 		}
-		out = append(out, item{v.Version, v.Digest, v.Yanked, m, m.EnforcedSummary(), v.CreatedAt, v.Removed, v.RemovedReason})
+		out = append(out, item{v.Version, v.Digest, v.Yanked, m, m.EnforcedSummary(), v.CreatedAt, v.Removed, v.RemovedReason, dl[v.Version].Total, dl[v.Version].Last30d})
 	}
 	writeJSON(w, 200, out)
 }
@@ -283,6 +316,13 @@ func (a *API) metadata(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := map[string]any{"ownerId": pick.OwnerID, "version": pick.Version, "digest": pick.Digest, "yanked": pick.Yanked, "manifest": pick.Manifest, "summary": pick.Manifest.EnforcedSummary(), "riskLabels": pick.Manifest.RiskLabels(), "createdAt": pick.CreatedAt}
+	// Raw request counts for this version (not a trust signal).
+	dl, err := a.store.VersionDownloads(r.PathValue("owner"), r.PathValue("name"))
+	if err != nil {
+		internal(w, err)
+		return
+	}
+	out["downloads"], out["downloads30d"] = dl[pick.Version].Total, dl[pick.Version].Last30d
 	// The README is author-supplied, unverified text. It is only on this
 	// per-version endpoint (never in lists, for size) and omitted when empty.
 	readme, err := a.store.Readme(r.PathValue("owner"), r.PathValue("name"), pick.Version)
@@ -313,7 +353,17 @@ func (a *API) download(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/gzip")
 	w.Header().Set("Content-Length", strconv.Itoa(len(b)))
-	w.Write(b)
+	n, err := w.Write(b)
+	// Count only a download that was actually served: HEAD requests (the
+	// route answers them through this handler) carry no body, and a write
+	// error means the client did not get the file. A failure to count is
+	// logged and never fails the download.
+	if r.Method == http.MethodHead || err != nil || n != len(b) {
+		return
+	}
+	if err := a.countDownload(r.PathValue("owner"), r.PathValue("name"), r.PathValue("version")); err != nil {
+		log.Printf("count download %s/%s@%s: %v", r.PathValue("owner"), r.PathValue("name"), r.PathValue("version"), err)
+	}
 }
 
 func (a *API) publish(w http.ResponseWriter, r *http.Request) {

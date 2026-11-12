@@ -47,6 +47,34 @@ func parseTokenTTLDays(v string) (time.Duration, error) {
 	return time.Duration(n) * 24 * time.Hour, nil
 }
 
+// parseQuotaLimits reads MAX_USER_BYTES, MAX_USER_BUNDLES, MAX_BUNDLE_VERSIONS
+// and MAX_TOTAL_BYTES. Unset means the default, 0 disables a limit, and
+// anything negative, non-numeric or too large is an error (the server
+// refuses to start rather than silently run without a limit it was asked for).
+func parseQuotaLimits(getenv func(string) string) (store.Limits, error) {
+	l := store.DefaultLimits()
+	for _, f := range []struct {
+		key string
+		dst *int64
+	}{
+		{"MAX_USER_BYTES", &l.UserBytes},
+		{"MAX_USER_BUNDLES", &l.UserBundles},
+		{"MAX_BUNDLE_VERSIONS", &l.BundleVersions},
+		{"MAX_TOTAL_BYTES", &l.TotalBytes},
+	} {
+		v := strings.TrimSpace(getenv(f.key))
+		if v == "" {
+			continue
+		}
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil || n < 0 {
+			return store.Limits{}, fmt.Errorf("%s must be a whole number of at least 0 (0 disables the limit), got %q", f.key, v)
+		}
+		*f.dst = n
+	}
+	return l, nil
+}
+
 func main() {
 	if err := godotenv.Load(); err != nil && !os.IsNotExist(err) {
 		log.Fatalf("load .env: %v", err)
@@ -61,11 +89,20 @@ func main() {
 	if dataDir == "" {
 		dataDir = "./data"
 	}
+	// Parse before opening the store: a bad limit must refuse to start before
+	// the database is migrated.
+	limits, err := parseQuotaLimits(os.Getenv)
+	if err != nil {
+		log.Fatal(err)
+	}
 	st, err := store.Open(dataDir)
 	if err != nil {
 		log.Fatalf("open store: %v", err)
 	}
 	defer st.Close()
+	st.SetLimits(limits)
+	log.Printf("quotas: user %d bytes, %d bundles, %d versions per bundle; registry %d bytes (0 = unlimited)",
+		limits.UserBytes, limits.UserBundles, limits.BundleVersions, limits.TotalBytes)
 
 	// Admins are GitHub numeric ids. A malformed list is fatal: silently
 	// ignoring a typo in a security setting could lock out the real admin.

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -42,6 +43,14 @@ func push(args []string, stdout, stderr io.Writer, e env) int {
 	}
 	c := client.New(e.registry, creds.Token)
 	if err := c.Publish(creds.Login, m.Metadata.Name, m.Metadata.Version, tarball); err != nil {
+		// A quota rejection carries a sentence written for the publisher
+		// (what limit, how much used); show it as is rather than as an HTTP
+		// error. The oversized-upload 413 has no limit and stays generic.
+		var ae *client.APIError
+		if errors.As(err, &ae) && ae.Limit != "" {
+			fmt.Fprintf(stderr, "capm push: %s\n", client.Sanitize(ae.Msg))
+			return 1
+		}
 		fmt.Fprintf(stderr, "capm push: %v\n", err)
 		return 1
 	}

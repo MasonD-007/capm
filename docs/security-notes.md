@@ -201,6 +201,20 @@ version number or another account (a new publish is not blocked by content).
 Every admin action is recorded in an audit log (`capm admin log`). The admin
 API answers 404 to everyone who is not an admin.
 
+## Quotas are the disk-fill defence
+
+The registry's volume does not enforce its size, so anyone with a GitHub
+account could otherwise fill it by publishing. Per-user limits (100 MiB, 50
+bundles, 200 versions per bundle by default) are checked inside the publish
+transaction, so concurrent uploads cannot slip past them, and a registry-wide
+cap (3 GiB) makes publishes fail with 507 before the disk is full. They bound a
+single account, not an attacker: many accounts can still add up, which is what
+the global stop is for, and it also stops honest users at that point. The
+limits do not cover a flood of rejected requests (a quota rejection still uses
+the user's hourly publish allowance, and per-IP limits apply only to login
+routes), nor the cost of the data in backups. Removed versions free their share
+once the blob is deleted; yanked ones do not.
+
 ## The public deployment
 
 The registry at `https://capm.masondrake.dev` is open to the internet, and

@@ -57,6 +57,8 @@ type Store struct {
 	blobMu sync.Mutex
 	// now is the clock for token expiry and throttling; tests replace it.
 	now func() time.Time
+	// limits are the default quotas (see accounting.go); set once at startup.
+	limits Limits
 }
 
 // Open creates dataDir if needed and opens (migrating) the database in it.
@@ -80,7 +82,11 @@ func Open(dataDir string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("store: repair token ids: %w", err)
 	}
-	return &Store{db: db, blobsDir: blobs, now: time.Now}, nil
+	if err := backfillSizes(db, blobs); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("store: backfill sizes: %w", err)
+	}
+	return &Store{db: db, blobsDir: blobs, now: time.Now, limits: DefaultLimits()}, nil
 }
 
 func (s *Store) Close() error { return s.db.Close() }
@@ -154,8 +160,23 @@ func (s *Store) Publish(ownerID int64, ownerLogin, name, version string, tarball
 	if _, err := tx.Exec(`INSERT OR IGNORE INTO bundles(name, owner_id) VALUES(?, ?)`, name, ownerID); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`INSERT INTO versions(owner_id, name, version, digest, manifest, created_at)
-		VALUES(?, ?, ?, ?, ?, ?)`, ownerID, name, version, "sha256:"+hexsum, string(mj), time.Now().Unix()); err != nil {
+	// Duplicates are reported before quota, so a rejected publish is never also
+	// a duplicate. The quota check and the insert below are one transaction on
+	// the store's only connection (and under blobMu), so no other publish can
+	// run between the check and the insert: concurrent publishes serialise
+	// and the second sees the first's row.
+	dup, err := count(tx, `SELECT count(*) FROM versions WHERE owner_id = ? AND name = ? AND version = ?`, ownerID, name, version)
+	if err != nil {
+		return err
+	}
+	if dup > 0 {
+		return ErrVersionExists
+	}
+	if err := s.checkQuota(tx, ownerID, name, "sha256:"+hexsum, int64(len(tarball))); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT INTO versions(owner_id, name, version, digest, manifest, created_at, size)
+		VALUES(?, ?, ?, ?, ?, ?, ?)`, ownerID, name, version, "sha256:"+hexsum, string(mj), time.Now().Unix(), len(tarball)); err != nil {
 		if isUnique(err) {
 			return ErrVersionExists
 		}

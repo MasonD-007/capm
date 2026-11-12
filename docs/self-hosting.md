@@ -409,6 +409,55 @@ out twice.
 Leave `sqlite3` with `.quit`, then scale back up as described at the end of
 [Maintenance pod](#maintenance-pod).
 
+## Quotas
+
+Because `local-path` does not enforce the volume size, the backend limits what
+can be stored. All four limits are environment variables with defaults, so the
+ConfigMap does not set them; `0` disables a limit, and a negative or
+non-numeric value stops the backend from starting (the offending variable is in
+the log).
+
+| Variable | Default | Limits |
+| --- | --- | --- |
+| `MAX_USER_BYTES` | 100 MiB | stored tarballs per owner (a digest shared by several of an owner's versions counts once; yanked versions count; removed versions do not) |
+| `MAX_USER_BUNDLES` | 50 | bundle names per owner (a name with only removed versions still counts) |
+| `MAX_BUNDLE_VERSIONS` | 200 | versions per bundle, yanked and removed included |
+| `MAX_TOTAL_BYTES` | 3 GiB | stored bytes across the whole registry; keep it under the volume size and the 4Gi `CapmDataVolumeFilling` alert |
+
+Admins are subject to the same limits. To give one user different limits (an
+override replaces the default for that user; it does not stack):
+
+```sh
+capm admin quota alice                          # usage, limits, and whether each is an override
+capm admin quota alice --bytes 500MiB --bundles 100
+capm admin quota alice --bytes 2GiB             # changes bytes only; keeps a bundles override
+capm admin quota alice --bytes 0                # unlimited bytes for this user
+capm admin quota alice --reset                  # back to the defaults
+```
+
+Sizes accept plain bytes or `KiB`/`MiB`/`GiB`/`TiB` (and `KB`/`MB`/`GB`/`TB`
+for powers of 1000). Overrides are audited (`capm admin log`). Changing a
+default means editing the variable (add it to the backend ConfigMap, then
+`kubectl -n capm rollout restart deploy/backend`); an override takes effect at
+once.
+
+What users see: `capm usage` prints their storage, bundle count and the
+per-bundle version limit. A `capm push` over a per-user or per-bundle limit
+exits 1 with the server's sentence, for example `storage limit reached: you
+store 99.0 MiB of your 100.0 MiB limit and this bundle would exceed it...`
+(HTTP 413, body `{"error": ..., "limit": "user_bytes", "used": N, "max": N}`;
+`limit` is one of `user_bytes`, `user_bundles`, `bundle_versions`). Over
+`MAX_TOTAL_BYTES` the answer is HTTP 507 `{"error": "the registry is full ...",
+"limit": "total_bytes"}` with no registry-wide numbers, and the backend logs a
+line starting `WARN: quota: registry storage limit total_bytes reached` each
+time. There is no metrics alert for it yet (that arrives with the metrics
+endpoint); until then watch the logs and the volume alert. A rejected publish
+still counts against the user's hourly publish allowance, and leaves nothing on
+disk. A limit never affects downloads: users already over a limit can still
+pull, and are only blocked from publishing more bytes. Re-publishing bytes the
+user already stores adds nothing. A restore of a removed version is not
+quota-checked.
+
 ## Before deploying a release that migrates the database
 
 The backend applies schema migrations when it starts, so a merge to `main` that
@@ -422,7 +471,31 @@ kubectl -n capm logs -f job/backup-pre-migrate     # wait for it to finish
 kubectl -n capm delete job backup-pre-migrate      # afterwards
 ```
 
-**This release (schema version 3) migrates the token table.** Every token
+**This release (schema version 4) migrates again, for [quotas](#quotas).** It
+adds `versions.size` and a `quota_overrides` table. Every start then fills in
+any missing `size` by statting the blob files (idempotent; a missing blob counts
+as 0 bytes and is logged once), so it also repairs rows a rolled-back release
+inserted. The default limits start enforcing on the first publish after the
+deploy, so check beforehand that nobody is already over them. Stop the backend
+and open the [maintenance pod](#maintenance-pod), then run this read-only query
+(it only uses columns that exist before migration 4):
+
+```sh
+sqlite3 -readonly -header -column /data/capm.db "SELECT u.login, count(DISTINCT v.name) AS bundles, count(*) AS versions, (SELECT max(c) FROM (SELECT count(*) AS c FROM versions WHERE owner_id = u.id GROUP BY name)) AS most_versions_in_one_bundle FROM users u JOIN versions v ON v.owner_id = u.id GROUP BY u.id ORDER BY bundles DESC;"
+```
+
+Compare `bundles` with 50 (`MAX_USER_BUNDLES`) and `most_versions_in_one_bundle`
+with 200 (`MAX_BUNDLE_VERSIONS`). Bytes cannot be computed from SQL before the
+migration (there is no `size` column yet); the whole-registry figure is
+`du -sh /data/blobs` against the 3 GiB `MAX_TOTAL_BYTES`. Per-owner bytes are
+available after the deploy with `capm admin quota <login>`. Anyone found over a
+limit is not locked out of anything: they can still pull, and only publishing
+more is refused until you raise their limit with `capm admin quota <login>
+--bytes ... --bundles ...` or they remove versions. If the query shows someone
+over a count limit, raise the default in the ConfigMap or give them an override
+right after the deploy.
+
+**Schema version 3 migrated the token table.** Every token
 issued before the deploy gets an expiry of 90 days after the deploy, so users
 who never log in again will be logged out then (`capm login` fixes it, and
 capm warns during the last 7 days). Announce it in the release notes. New

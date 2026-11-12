@@ -55,6 +55,7 @@ Commands:
   whoami    Print the login you are authenticated as
   logout    Revoke this machine's token and delete the stored credentials
   tokens    List your login tokens; "tokens revoke <id>" revokes one
+  usage     Show your storage use and the registry's limits
   push      Package and publish an agent to a registry
   pull      Download a bundle and check it against the registry's sha256 digest (bundles are not signed)
   inspect   Show the bundle's declared permissions (not enforced; see the egress line);
@@ -115,6 +116,8 @@ func runEnv(args []string, stdout, stderr io.Writer, e env) int {
 		return logout(args[1:], stdout, stderr, e)
 	case "tokens":
 		return tokens(args[1:], stdout, stderr, e)
+	case "usage":
+		return usageCmd(args[1:], stdout, stderr, e)
 	case "push":
 		return push(args[1:], stdout, stderr, e)
 	case "pull":

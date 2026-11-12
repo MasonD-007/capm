@@ -255,8 +255,8 @@ func (a *API) versions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, out)
 }
 
-// metadata returns the manifest, summary, digest and yanked flag for one exact
-// version, so a client can inspect a bundle without downloading it. Unlike
+// metadata returns the manifest, summary, digest, yanked flag and (when the
+// bundle has one) README text for one exact version, so a client can inspect a bundle without downloading it. Unlike
 // /resolve it does not accept "latest"; callers resolve a version first.
 func (a *API) metadata(w http.ResponseWriter, r *http.Request) {
 	vs, err := a.store.Versions(r.PathValue("owner"), r.PathValue("name"))
@@ -282,7 +282,18 @@ func (a *API) metadata(w http.ResponseWriter, r *http.Request) {
 		writeGone(w, pick.RemovedReason)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"ownerId": pick.OwnerID, "version": pick.Version, "digest": pick.Digest, "yanked": pick.Yanked, "manifest": pick.Manifest, "summary": pick.Manifest.EnforcedSummary(), "riskLabels": pick.Manifest.RiskLabels(), "createdAt": pick.CreatedAt})
+	out := map[string]any{"ownerId": pick.OwnerID, "version": pick.Version, "digest": pick.Digest, "yanked": pick.Yanked, "manifest": pick.Manifest, "summary": pick.Manifest.EnforcedSummary(), "riskLabels": pick.Manifest.RiskLabels(), "createdAt": pick.CreatedAt}
+	// The README is author-supplied, unverified text. It is only on this
+	// per-version endpoint (never in lists, for size) and omitted when empty.
+	readme, err := a.store.Readme(r.PathValue("owner"), r.PathValue("name"), pick.Version)
+	if err != nil {
+		internal(w, err)
+		return
+	}
+	if readme != "" {
+		out["readme"] = readme
+	}
+	writeJSON(w, 200, out)
 }
 
 func (a *API) download(w http.ResponseWriter, r *http.Request) {

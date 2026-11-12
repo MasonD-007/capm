@@ -37,7 +37,14 @@ export type BundleListItem = {
   latest: string;
   /** Author's description of that version (unverified). */
   description: string;
+  /** Highest risk label severity of `latest`: "high", "caution", "info" or "". Absent on older servers. */
+  risk?: string;
+  /** Risk labels of `latest`, computed by the registry from its manifest. Absent on older servers. */
+  riskLabels?: RiskLabel[];
 };
+
+/** Mirrors manifest.RiskLabel (manifest/risk.go). `reason` is registry text: render it cleaned. */
+export type RiskLabel = { id: string; severity: string; reason: string };
 
 export type BundleVersion = {
   version: string;
@@ -123,7 +130,28 @@ export async function getBundle(owner: string, name: string): Promise<BundleVers
   );
 }
 
-type Parsed = { nums: number[]; pre: string[] };
+/**
+ * Risk labels for one exact version, from the metadata endpoint (the versions
+ * list does not carry them). null when the registry predates labels, the call
+ * fails or the arguments are not plain path segments; [] means none apply.
+ */
+export async function getRiskLabels(
+  owner: string,
+  name: string,
+  version: string,
+): Promise<RiskLabel[] | null> {
+  if (!validSegment(owner) || !validSegment(name) || !validSegment(version)) return null;
+  try {
+    const m = await get<{ riskLabels?: unknown }>(
+      `/v1/bundles/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/${encodeURIComponent(version)}`,
+    );
+    return Array.isArray(m?.riskLabels) ? (m.riskLabels as RiskLabel[]) : null;
+  } catch {
+    return null;
+  }
+}
+
+type Parsed ={ nums: number[]; pre: string[] };
 
 function parse(v: string): Parsed | null {
   const m = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+.*)?$/.exec(v);

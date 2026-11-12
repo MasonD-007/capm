@@ -97,6 +97,8 @@ export CAPM_REGISTRY=http://localhost:8080   # needed for local development; the
 
 capm login                         # GitHub device flow; prints a URL and a code
 capm whoami                        # your login on stdout; asks the registry whether the stored token still works
+capm init ./my-bundle              # writes a commented capm.yaml (asks questions on a terminal)
+capm lint ./my-bundle              # checks the bundle before you publish it
 capm push ./my-bundle              # publishes <your-login>/<metadata.name>@<metadata.version>
 capm tokens                        # your login tokens (id, name, last used, expiry); * marks this machine
 capm tokens revoke 7               # revoke one, e.g. a lost laptop
@@ -140,6 +142,51 @@ listed hosts (see the security notes). It also refuses while a global sbx
 `anthropic` secret is stored, unless you pass `--allow-global-anthropic-secret`.
 Mount paths in the manifest are resolved under `--workdir` (default: the
 current directory).
+
+### Write your first bundle
+
+```sh
+capm init my-agent         # questions on a terminal; or: capm init my-agent --yes --name my-agent
+cd my-agent
+$EDITOR capm.yaml prompts/system.md    # describe it, write the prompt
+capm lint                  # problems, warnings, then the risk labels
+capm inspect .             # the permissions you are declaring
+capm login                 # once
+capm push .                # publishes <your-login>/my-agent@0.1.0
+```
+
+`init` writes a commented `capm.yaml` and, if you want, a placeholder
+`prompts/system.md`. The defaults are the most restrictive: version `0.1.0`, no
+egress hosts, no mounts, no secrets, no MCP servers. Answer the questions (or
+pass `--egress`, `--mount path:mode`, `--secret NAME`, `--base`, ... with
+`--yes`) to widen them. `init` refuses to run where a `capm.yaml` exists and never
+overwrites a file.
+
+Only `capm.yaml`, the files listed under `context` and a root `README.md` are
+published. `capm lint` reports (`error[id]` / `warning[id]` on stderr, risk
+labels on stdout; exit 0 with no errors, 1 with errors or, with `--strict`, any
+warning, 2 for usage mistakes):
+
+| Rule | Severity | Meaning |
+|---|---|---|
+| `context_missing` | error | a listed context file does not exist or is not a plain file, so push would fail |
+| `secret_file` | error | a file that would be published looks like a credential |
+| `secret_file_nearby` | warning | a credential-looking file sits in the directory but is not published |
+| `context_unlisted` | warning | a file in the directory is not listed in `context`, so it is NOT published |
+| `no_description`, `no_authors` | warning | the manifest has no description or authors |
+| `size_near_limit` | warning | the packed bundle is over 80% of the 5 MiB publish limit |
+| `version_not_bumped` | warning | the version already exists on the registry or is lower than the latest (needs `capm login`; skipped with `--offline`; a network failure skips it with a note) |
+
+The secret check looks at what would be published, by file name (`.env`,
+`.env.*` except `.env.example`/`.sample`/`.template`, `*.pem`, `*.key`,
+`id_rsa`, `id_ed25519`, `credentials.json`, `.npmrc`, `.netrc`) and by content
+(private-key headers and GitHub, AWS, Slack and Anthropic token shapes). It
+prints the file, line and pattern name, never the matched text. It is a
+safety net for common mistakes, not a guarantee. `capm push` runs the two
+error-level checks before it sends anything and refuses if either fires; if a
+flagged file really is meant to be public, `capm push --allow-secret-files`
+turns the `secret_file` error into a warning. The other rules are not run by
+`push`.
 
 ### What capm remembers
 

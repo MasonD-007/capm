@@ -56,6 +56,8 @@ Commands:
   logout    Revoke this machine's token and delete the stored credentials
   tokens    List your login tokens; "tokens revoke <id>" revokes one
   usage     Show your storage use and the registry's limits
+  init      Create a commented capm.yaml (and a starter prompt) in a new bundle directory
+  lint      Check a bundle directory for problems before publishing; "--strict" makes warnings fail
   push      Package and publish an agent to a registry
   pull      Download a bundle and check it against the registry's sha256 digest (bundles are not signed)
   inspect   Show the bundle's declared permissions (not enforced; see the egress line);
@@ -88,6 +90,22 @@ capm run [--yes] [--workdir DIR] [--model-url URL] [--model-key KEY] [--model NA
   The same version served with different bytes is refused unless
   --accept-changed-digest is given.
 
+capm init [dir] [--yes] [--name N] [--description T] [--author A] [--base AGENT] [--base-version TAG]
+          [--egress HOST] [--mount PATH[:MODE]] [--secret NAME]
+  Writes a commented capm.yaml (version 0.1.0, no egress, mounts, secrets or MCP
+  servers unless you ask) and optionally prompts/system.md. Asks questions on a
+  terminal; --yes takes the defaults plus any flags. Never overwrites a file.
+
+capm lint [dir] [--strict] [--offline]
+  Checks the bundle: manifest errors, missing context files, credential-looking
+  files (errors; push refuses on these too, see --allow-secret-files), unlisted
+  files (not published), size, and whether the version is new on the registry
+  (skipped with --offline). Exit 0 ok, 1 errors (or warnings with --strict), 2 usage.
+
+capm push [--allow-secret-files] <dir>
+  Refuses before any request when a listed context file is missing or a packed
+  file looks like a credential.
+
 capm pull [--accept-new-owner] user/name[@version]
   Downloads the bundle into ./name/ after checking its digest, and remembers
   the owner's account id the same way. --accept-new-owner accepts a changed owner.
@@ -115,6 +133,10 @@ func runEnv(args []string, stdout, stderr io.Writer, e env) int {
 		return admin(args[1:], stdout, stderr, e)
 	case "inspect":
 		return inspect(args[1:], stdout, stderr, e)
+	case "lint":
+		return lint(args[1:], stdout, stderr, e)
+	case "init":
+		return initCmd(args[1:], stdout, stderr, e)
 	case "login":
 		return login(args[1:], stdout, stderr, e)
 	case "whoami":

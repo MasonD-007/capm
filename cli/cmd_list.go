@@ -62,11 +62,22 @@ func listBundles(cmd, q, owner string, stdout, stderr io.Writer, e env) int {
 		fmt.Fprintln(stderr, "no bundles found")
 		return 0
 	}
+	// The marker column is only present when some row has a marker, so a
+	// registry that sends no `risk` (or flags nothing) prints the table as it
+	// always was.
+	marked := false
+	for _, b := range all {
+		marked = marked || riskMarker(b.Risk) != ""
+	}
 	tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
 	for _, b := range all {
 		latest := client.Sanitize(b.Latest)
 		if latest == "" {
 			latest = "-" // every version is yanked or removed
+		}
+		if marked {
+			fmt.Fprintf(tw, "%s/%s\t%s\t%s\t%s\n", client.Sanitize(b.Owner), client.Sanitize(b.Name), latest, riskMarker(b.Risk), shortDesc(b.Description))
+			continue
 		}
 		fmt.Fprintf(tw, "%s/%s\t%s\t%s\n", client.Sanitize(b.Owner), client.Sanitize(b.Name), latest, shortDesc(b.Description))
 	}
@@ -87,4 +98,18 @@ func shortDesc(s string) string {
 		return string(r[:listDescMax-1]) + "…"
 	}
 	return string(r)
+}
+
+// riskMarker maps the registry's claimed highest risk severity to a compact
+// marker: "!!" high, "!" caution, "" for anything else (including an older
+// server that sends nothing). It is the registry's claim, not a verdict; a
+// blank is not an endorsement. Unknown strings are never echoed.
+func riskMarker(risk string) string {
+	switch risk {
+	case "high":
+		return "!!"
+	case "caution":
+		return "!"
+	}
+	return ""
 }

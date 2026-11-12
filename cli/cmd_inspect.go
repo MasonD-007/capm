@@ -49,6 +49,7 @@ func inspect(args []string, stdout, stderr io.Writer, e env) int {
 		return 1
 	}
 	fmt.Fprint(stdout, m.EnforcedSummary().Render())
+	fmt.Fprint(stdout, "\n"+manifest.RenderRiskLabels(m.RiskLabels()))
 	return 0
 }
 
@@ -89,6 +90,7 @@ func inspectRemote(owner, name, spec string, diff bool, oldVersion string, stdou
 		return inspectDiff(c, ks, e, owner, name, res, md, oldVersion, stdout, stderr)
 	}
 	fmt.Fprint(stdout, m.EnforcedSummary().Render())
+	fmt.Fprint(stdout, "\n"+manifest.RenderRiskLabels(m.RiskLabels()))
 	return 0
 }
 

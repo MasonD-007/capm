@@ -218,6 +218,7 @@ func runCmd(args []string, stdout, stderr io.Writer, e env) int {
 		return fail("%v", err)
 	}
 	fmt.Fprint(stdout, m.EnforcedSummary().Render())
+	fmt.Fprint(stdout, "\n"+manifest.RenderRiskLabels(m.RiskLabels()))
 	fmt.Fprint(stdout, renderRunInfo(m, info))
 	fmt.Fprint(stdout, since.render())
 

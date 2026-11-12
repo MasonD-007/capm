@@ -85,6 +85,12 @@ type BundleInfo struct {
 	Name        string `json:"name"`
 	Latest      string `json:"latest"`
 	Description string `json:"description"`
+	// Risk is the registry's claim of the highest risk label severity of
+	// Latest ("high", "caution", "info" or ""); empty from an older server.
+	// It is untrusted and only drives the list marker; `capm inspect`
+	// recomputes labels from the manifest. The server's riskLabels are
+	// deliberately not decoded.
+	Risk string `json:"risk"`
 }
 
 // Sanitize makes a server-supplied string safe to print on a terminal: C0

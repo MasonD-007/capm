@@ -92,7 +92,13 @@ capm pull [--accept-new-owner] user/name[@version]
   Downloads the bundle into ./name/ after checking its digest, and remembers
   the owner's account id the same way. --accept-new-owner accepts a changed owner.
 
-capm list / capm search
+capm list [owner] [--sort name|recent|downloads] / capm search <text> [--sort name|recent|downloads]
+  --sort recent orders by the newest version's date and adds a YYYY-MM-DD
+  column; --sort downloads orders by raw download requests over the last 30
+  days and adds that count as a column. Counts can be inflated by anyone and
+  are not a trust or quality signal. name (the default) is alphabetical. A
+  registry that does not support sorting is noted once on stderr and shown
+  in its default order.
   A "!!" or "!" before the description is the registry's claim about the
   bundle's highest risk label (!! high, ! caution); blank means none flagged,
   an info-only label, or a registry that does not report it, and is not an

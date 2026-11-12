@@ -47,32 +47,6 @@ type Store struct {
 	blobsDir string
 }
 
-const schema = `
-CREATE TABLE IF NOT EXISTS users (
-	id    INTEGER PRIMARY KEY,
-	login TEXT NOT NULL UNIQUE COLLATE NOCASE
-);
-CREATE TABLE IF NOT EXISTS bundles (
-	owner_id INTEGER NOT NULL REFERENCES users(id),
-	name     TEXT NOT NULL,
-	PRIMARY KEY(owner_id, name)
-);
-CREATE TABLE IF NOT EXISTS versions (
-	owner_id   INTEGER NOT NULL,
-	name       TEXT NOT NULL,
-	version    TEXT NOT NULL,
-	digest     TEXT NOT NULL,
-	yanked     INTEGER NOT NULL DEFAULT 0,
-	manifest   TEXT NOT NULL,
-	created_at INTEGER NOT NULL,
-	UNIQUE(owner_id, name, version)
-);
-CREATE TABLE IF NOT EXISTS tokens (
-	hash       BLOB PRIMARY KEY,
-	user_id    INTEGER NOT NULL REFERENCES users(id),
-	created_at INTEGER NOT NULL
-);`
-
 // Open creates dataDir if needed and opens (migrating) the database in it.
 func Open(dataDir string) (*Store, error) {
 	blobs := filepath.Join(dataDir, "blobs")
@@ -86,7 +60,7 @@ func Open(dataDir string) (*Store, error) {
 	}
 	// One connection serializes writers, which keeps publishes race-free.
 	db.SetMaxOpenConns(1)
-	if _, err := db.Exec(schema); err != nil {
+	if err := migrate(db, migrations); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("store: migrate: %w", err)
 	}

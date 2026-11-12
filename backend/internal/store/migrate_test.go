@@ -136,8 +136,8 @@ func TestMigrateV1Database(t *testing.T) {
 		t.Fatal(err)
 	}
 	db := s.db
-	if v := schemaVersion(t, db); v != len(migrations) || v != 2 {
-		t.Fatalf("schema_version = %d, want 2 (len(migrations)=%d)", v, len(migrations))
+	if v := schemaVersion(t, db); v != len(migrations) || v != 3 {
+		t.Fatalf("schema_version = %d, want 3 (len(migrations)=%d)", v, len(migrations))
 	}
 	if got := dumpRows(t, db, `SELECT * FROM users ORDER BY id`); !reflect.DeepEqual(got, before) {
 		t.Fatalf("users changed: %v vs %v", got, before)
@@ -177,7 +177,7 @@ func TestMigrateV1Database(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s2.Close()
-	if v := schemaVersion(t, s2.db); v != 2 {
+	if v := schemaVersion(t, s2.db); v != 3 {
 		t.Fatalf("version after reopen = %d", v)
 	}
 	if got := schemaDump(t, s2.db); !reflect.DeepEqual(got, afterFirst) {

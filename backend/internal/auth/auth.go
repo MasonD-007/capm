@@ -273,7 +273,7 @@ func (s *Service) token(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tok := base64.RawURLEncoding.EncodeToString(raw)
-	if err := s.store.CreateToken(hashToken(tok), id); err != nil {
+	if err := s.store.CreateToken(hashToken(tok), id, "", time.Time{}); err != nil {
 		log.Printf("auth: store token: %v", err)
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return

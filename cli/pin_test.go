@@ -9,12 +9,16 @@ import (
 	"github.com/MasonD-007/capm/manifest"
 )
 
+// fixtureAbs is the fixture's absolute path, taken before any test changes
+// the working directory.
+var fixtureAbs, _ = filepath.Abs(fixtureDir)
+
 // fixtureTar packs a copy of the pr-reviewer fixture at the given version;
 // edit (optional) rewrites the manifest text first.
 func fixtureTar(t *testing.T, version string, edit func(string) string) []byte {
 	t.Helper()
 	dst := t.TempDir()
-	if err := os.CopyFS(dst, os.DirFS(fixtureDir)); err != nil {
+	if err := os.CopyFS(dst, os.DirFS(fixtureAbs)); err != nil {
 		t.Fatal(err)
 	}
 	p := filepath.Join(dst, manifest.FileName)

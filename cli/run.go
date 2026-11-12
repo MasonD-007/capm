@@ -52,7 +52,8 @@ Commands:
   login     Authenticate with a registry
   push      Package and publish an agent to a registry
   pull      Download a bundle and check it against the registry's sha256 digest (bundles are not signed)
-  inspect   Show the bundle's declared permissions (not enforced; see the egress line)
+  inspect   Show the bundle's declared permissions (not enforced; see the egress line);
+            with --diff [oldversion], show what changed since the version you last ran
   run       Launch an agent in a Docker Sandbox (sbx)
   search    Find bundles whose owner, name or description contains the text
   list      List bundles in the registry, or only one owner's
@@ -60,7 +61,8 @@ Commands:
   version   Print the capm version
 
 capm run [--yes] [--workdir DIR] [--model-url URL] [--model-key KEY] [--model NAME]
-         [--allow-unenforced-egress] [--allow-global-anthropic-secret] [--accept-new-owner] <dir | user/name[@version]>
+         [--allow-unenforced-egress] [--allow-global-anthropic-secret] [--accept-new-owner]
+         [--accept-permission-changes] [--accept-changed-digest] <dir | user/name[@version]>
   Shows the declared permissions and run plan, asks to confirm (--yes skips),
   then runs the agent with sbx. Mount paths are relative to --workdir
   (default: the current directory). The model endpoint comes from --model-url
@@ -73,6 +75,12 @@ capm run [--yes] [--workdir DIR] [--model-url URL] [--model-key KEY] [--model NA
   --allow-global-anthropic-secret is given.
   For a registry bundle, capm remembers the owner's account id the first time
   and refuses if it later changes unless --accept-new-owner is given.
+  It also remembers the permissions of the last registry version you ran and,
+  before asking to confirm a different version, shows what changed (+ added,
+  - removed, ~ changed). When something is added or widened, --yes alone does
+  not skip the confirmation: non-interactive runs need --accept-permission-changes.
+  The same version served with different bytes is refused unless
+  --accept-changed-digest is given.
 
 capm pull [--accept-new-owner] user/name[@version]
   Downloads the bundle into ./name/ after checking its digest, and remembers

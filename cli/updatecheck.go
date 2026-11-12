@@ -298,4 +298,3 @@ func (e env) maybeNotifyUpdate(args []string, code int, stderr io.Writer) {
 		fmt.Fprintf(stderr, "a newer capm is available (%s); run capm self-update\n", manifest.DisplaySafe(latest))
 	}
 }
-

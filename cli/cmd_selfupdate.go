@@ -239,4 +239,3 @@ func replaceExecutable(dst string, data []byte) error {
 	}
 	return nil
 }
-

@@ -74,6 +74,10 @@ func inspectRemote(owner, name, spec string, stdout, stderr io.Writer, e env) in
 	fmt.Fprintf(stderr, "inspecting registry %s/%s@%s\n", owner, name, res.Version)
 	fmt.Fprintln(stderr, "note: metadata only; the bundle was not downloaded, so its digest was not checked")
 	warnYanked(stderr, owner, name, res)
+	// Read-only: inspect shows the pin status but never records anything.
+	ks := newKnownStore(e, stderr)
+	rec, recorded := ks.get(e.registry, owner, name)
+	fmt.Fprintln(stderr, describePin(pinStatus(rec, recorded, res.OwnerID), rec, recorded))
 	fmt.Fprint(stdout, m.EnforcedSummary().Render())
 	return 0
 }

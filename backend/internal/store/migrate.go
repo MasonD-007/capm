@@ -24,6 +24,7 @@ var migrations = []migration{
 	migrateV2,
 	migrateV3,
 	migrateV4,
+	migrateV5,
 }
 
 // migrateV1 is the schema as it existed before migrations were introduced.
@@ -123,6 +124,14 @@ CREATE TABLE quota_overrides (
 	max_bundles INTEGER,
 	updated_at  INTEGER NOT NULL
 );`)
+	return err
+}
+
+// migrateV5 adds the README text extracted from a version's bundle at publish
+// time. Existing versions keep ” (no backfill from blobs); a rolled-back
+// release's Publish omits the column and gets the default.
+func migrateV5(tx *sql.Tx) error {
+	_, err := tx.Exec(`ALTER TABLE versions ADD COLUMN readme TEXT NOT NULL DEFAULT ''`)
 	return err
 }
 

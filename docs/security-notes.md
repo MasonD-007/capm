@@ -54,6 +54,27 @@ lists the files but cannot tell whether their content is safe. Read them
 (`capm pull`, then open them) before running a bundle with read-write mounts
 or secrets.
 
+## README text on the website is untrusted
+
+A bundle's root `README.md` is shown on its web page below everything derived
+from the manifest, under a heading that says it is from the author and
+unverified. The registry stores it at publish time (64 KiB cap, invalid UTF-8
+replaced) and the website renders it as Markdown with these rules:
+
+- Raw HTML is never rendered: `<script>`, `<iframe>`, inline styles and event
+  handlers appear as plain text.
+- Links keep only `http:`, `https:` and `mailto:` destinations, and carry
+  `rel="nofollow noopener noreferrer"`. `javascript:`, `data:`, relative and
+  other links lose their destination and show as text.
+- Images are never loaded (no tracking pixels, no remote content); each is
+  shown as a text link to the image URL.
+- Headings are demoted so a README cannot pose as a page section, and control
+  and bidirectional-override characters are replaced.
+
+A README can still lie, and its links can point anywhere. The CLI does not
+print it. Removed versions serve no README, and the versions list endpoint
+never includes README bodies.
+
 ## No signing; identity is a GitHub login
 
 Bundles are not signed in v1. `capm pull` checks the download against the

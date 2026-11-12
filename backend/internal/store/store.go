@@ -128,6 +128,11 @@ func (s *Store) Publish(ownerID int64, ownerLogin, name, version string, tarball
 		return err
 	}
 
+	readme, err := readReadme(tmp)
+	if err != nil {
+		return err
+	}
+
 	sum := sha256.Sum256(tarball)
 	hexsum := hex.EncodeToString(sum[:])
 	final := filepath.Join(s.blobsDir, hexsum)
@@ -175,8 +180,8 @@ func (s *Store) Publish(ownerID int64, ownerLogin, name, version string, tarball
 	if err := s.checkQuota(tx, ownerID, name, "sha256:"+hexsum, int64(len(tarball))); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`INSERT INTO versions(owner_id, name, version, digest, manifest, created_at, size)
-		VALUES(?, ?, ?, ?, ?, ?, ?)`, ownerID, name, version, "sha256:"+hexsum, string(mj), time.Now().Unix(), len(tarball)); err != nil {
+	if _, err := tx.Exec(`INSERT INTO versions(owner_id, name, version, digest, manifest, created_at, size, readme)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?)`, ownerID, name, version, "sha256:"+hexsum, string(mj), time.Now().Unix(), len(tarball), readme); err != nil {
 		if isUnique(err) {
 			return ErrVersionExists
 		}

@@ -337,13 +337,13 @@ directly. Follow [Maintenance pod](#maintenance-pod) (backend at 0 replicas,
 ArgoCD paused) up to the `kubectl exec` shell, then `sqlite3 /data/capm.db`.
 The `sqlite3` shell runs with foreign keys off, so do not delete `users` rows.
 
-Schema (schema version 3; see `backend/internal/store/migrate.go`):
+Schema (schema version 5; see `backend/internal/store/migrate.go`):
 
 | Table | Columns |
 |---|---|
 | `users` | `id` (GitHub numeric id), `login` (unique, case-insensitive; renamed accounts are tombstoned as `~<id>`) |
 | `bundles` | `owner_id`, `name` |
-| `versions` | `owner_id`, `name`, `version`, `digest` (`sha256:<hex>`), `yanked`, `manifest` (JSON), `created_at`, `removed` (0 or 1), `removed_reason` |
+| `versions` | `owner_id`, `name`, `version`, `digest` (`sha256:<hex>`), `yanked`, `manifest` (JSON), `created_at`, `removed` (0 or 1), `removed_reason`, `size` (blob bytes), `readme` (author text, may be empty) |
 | `tokens` | `hash` (sha256 of the token, primary key), `user_id`, `created_at`, `id` (public handle, unique), `name`, `expires_at` (unix seconds, NULL = never), `last_used_at`, `revoked_at` (NULL = live) |
 | `banned_users` | `user_id` (primary key), `reason`, `created_at` |
 | `admin_actions` | `id`, `admin_id`, `action`, `target`, `reason`, `created_at` |
@@ -471,7 +471,14 @@ kubectl -n capm logs -f job/backup-pre-migrate     # wait for it to finish
 kubectl -n capm delete job backup-pre-migrate      # afterwards
 ```
 
-**This release (schema version 4) migrates again, for [quotas](#quotas).** It
+**This release (schema version 5) migrates again, for README support (step
+5).** It adds one column, `versions.readme TEXT NOT NULL DEFAULT ''`; existing
+versions keep an empty README (no backfill from blobs). Take the backup above
+first. A release older than 5 refuses to start on a version-5 database ("newer
+than this server supports"), so a rollback needs the pre-migration snapshot or
+a roll-forward fix.
+
+**Schema version 4 migrated for [quotas](#quotas).** It
 adds `versions.size` and a `quota_overrides` table. Every start then fills in
 any missing `size` by statting the blob files (idempotent; a missing blob counts
 as 0 bytes and is logged once), so it also repairs rows a rolled-back release

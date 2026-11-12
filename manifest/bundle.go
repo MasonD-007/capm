@@ -13,6 +13,12 @@ import (
 	"strings"
 )
 
+// ReadmeName is the one file a bundle may carry without declaring it in
+// context: a regular file at the bundle root. The registry shows it on the
+// website as unverified author text; it is never part of what the agent runs
+// with unless the manifest also lists it.
+const ReadmeName = "README.md"
+
 // maxFileSize caps any single file in a bundle, in both directions.
 const maxFileSize = 8 << 20
 
@@ -44,6 +50,18 @@ func PackDir(dir string) ([]byte, error) {
 		return nil, err
 	}
 	seen := map[string]bool{FileName: true}
+	// An undeclared root README.md is packed when it is a plain file; a
+	// symlink or directory of that name is ignored, never followed.
+	if fi, err := os.Lstat(filepath.Join(dir, ReadmeName)); err == nil && fi.Mode().IsRegular() {
+		data, err := readRegular(dir, ReadmeName)
+		if err != nil {
+			return nil, fmt.Errorf("bundle: %s: %w", ReadmeName, err)
+		}
+		if err := writeEntry(tw, ReadmeName, data); err != nil {
+			return nil, err
+		}
+		seen[ReadmeName] = true
+	}
 	for _, rel := range m.Context {
 		name := path.Clean(filepath.ToSlash(rel))
 		if seen[name] {
@@ -171,6 +189,7 @@ func UnpackTo(tarball []byte, dest string) (*Manifest, error) {
 			for _, c := range m.Context {
 				allowed[path.Clean(filepath.ToSlash(c))] = true
 			}
+			allowed[ReadmeName] = true
 		}
 	}
 	if m == nil {

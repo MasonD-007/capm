@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/MasonD-007/capm/manifest"
@@ -35,16 +36,24 @@ type Bundle struct {
 }
 
 type Version struct {
-	Version   string
-	Digest    string // "sha256:<hex>"
-	Yanked    bool
-	Manifest  manifest.Manifest
-	CreatedAt time.Time
+	Version string
+	Digest  string // "sha256:<hex>"
+	Yanked  bool
+	// Removed marks an admin takedown; RemovedReason is the admin's text
+	// (untrusted by clients like any registry string).
+	Removed       bool
+	RemovedReason string
+	Manifest      manifest.Manifest
+	CreatedAt     time.Time
 }
 
 type Store struct {
 	db       *sql.DB
 	blobsDir string
+	// blobMu serialises Publish's blob write+commit with a removal's commit+
+	// unlink, so a removal can never delete a blob a concurrent publish just
+	// re-used.
+	blobMu sync.Mutex
 }
 
 // Open creates dataDir if needed and opens (migrating) the database in it.
@@ -68,6 +77,15 @@ func Open(dataDir string) (*Store, error) {
 }
 
 func (s *Store) Close() error { return s.db.Close() }
+
+func isPK(err error) bool {
+	var se *sqlite.Error
+	return errors.As(err, &se) && se.Code() == sqlite3.SQLITE_CONSTRAINT_PRIMARYKEY
+}
+
+// notBanned is a WHERE fragment (over versions aliased v) hiding versions of
+// banned owners: their bundles answer exactly like bundles that don't exist.
+const notBanned = ` AND NOT EXISTS (SELECT 1 FROM banned_users bu WHERE bu.user_id = v.owner_id)`
 
 func isUnique(err error) bool {
 	var se *sqlite.Error
@@ -115,6 +133,8 @@ func (s *Store) Publish(ownerID int64, ownerLogin, name, version string, tarball
 		return err
 	}
 
+	s.blobMu.Lock()
+	defer s.blobMu.Unlock()
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -150,9 +170,9 @@ func (s *Store) Publish(ownerID int64, ownerLogin, name, version string, tarball
 }
 
 func (s *Store) Versions(ownerLogin, name string) ([]Version, error) {
-	rows, err := s.db.Query(`SELECT v.version, v.digest, v.yanked, v.manifest, v.created_at
+	rows, err := s.db.Query(`SELECT v.version, v.digest, v.yanked, v.manifest, v.created_at, v.removed, v.removed_reason
 		FROM versions v JOIN users u ON u.id = v.owner_id
-		WHERE u.login = ? AND v.name = ? ORDER BY v.created_at, v.rowid`, ownerLogin, name)
+		WHERE u.login = ? AND v.name = ?`+notBanned+` ORDER BY v.created_at, v.rowid`, ownerLogin, name)
 	if err != nil {
 		return nil, err
 	}
@@ -164,14 +184,16 @@ func (s *Store) Versions(ownerLogin, name string) ([]Version, error) {
 			mj      string
 			yanked  int
 			created int64
+			removed int
 		)
-		if err := rows.Scan(&v.Version, &v.Digest, &yanked, &mj, &created); err != nil {
+		if err := rows.Scan(&v.Version, &v.Digest, &yanked, &mj, &created, &removed, &v.RemovedReason); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal([]byte(mj), &v.Manifest); err != nil {
 			return nil, err
 		}
 		v.Yanked = yanked != 0
+		v.Removed = removed != 0
 		v.CreatedAt = time.Unix(created, 0).UTC()
 		out = append(out, v)
 	}
@@ -205,14 +227,20 @@ func (s *Store) SetYanked(ownerID int64, name, version string, yanked bool) erro
 }
 
 func (s *Store) Blob(ownerLogin, name, version string) ([]byte, error) {
-	var digest string
-	err := s.db.QueryRow(`SELECT v.digest FROM versions v JOIN users u ON u.id = v.owner_id
-		WHERE u.login = ? AND v.name = ? AND v.version = ?`, ownerLogin, name, version).Scan(&digest)
+	var (
+		digest, reason string
+		removed        int
+	)
+	err := s.db.QueryRow(`SELECT v.digest, v.removed, v.removed_reason FROM versions v JOIN users u ON u.id = v.owner_id
+		WHERE u.login = ? AND v.name = ? AND v.version = ?`+notBanned, ownerLogin, name, version).Scan(&digest, &removed, &reason)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, err
+	}
+	if removed != 0 {
+		return nil, &RemovedError{Reason: reason}
 	}
 	return os.ReadFile(filepath.Join(s.blobsDir, strings.TrimPrefix(digest, "sha256:")))
 }
@@ -225,7 +253,7 @@ func (s *Store) List(limit, offset int) ([]Bundle, error) {
 // match); "" means every owner. A negative limit means no limit.
 func (s *Store) ListByOwner(owner string, limit, offset int) ([]Bundle, error) {
 	rows, err := s.db.Query(`SELECT u.id, u.login, b.name FROM bundles b JOIN users u ON u.id = b.owner_id
-		WHERE u.login NOT LIKE '~%' AND (? = '' OR u.login = ? COLLATE NOCASE)
+		WHERE u.login NOT LIKE '~%' AND NOT EXISTS (SELECT 1 FROM banned_users bu WHERE bu.user_id = u.id) AND (? = '' OR u.login = ? COLLATE NOCASE)
 		ORDER BY u.login, b.name LIMIT ? OFFSET ?`, owner, owner, limit, offset)
 	if err != nil {
 		return nil, err

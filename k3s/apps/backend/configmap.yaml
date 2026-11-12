@@ -9,3 +9,5 @@ data:
   # GitHub OAuth app client ID (Device Flow). Not a secret.
   GITHUB_CLIENT_ID: "Ov23liCnajYhhBuGathD"
   TRUSTED_PROXY: "true"
+  # GitHub numeric ids allowed to use /v1/admin/* (MasonD-007). Not a secret.
+  ADMIN_GITHUB_IDS: "139420415"

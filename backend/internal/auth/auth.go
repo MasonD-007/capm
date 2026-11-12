@@ -12,10 +12,12 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,12 +28,16 @@ type Config struct {
 	ClientID string // required for the auth routes to work
 	APIURL   string // default https://api.github.com
 	OAuthURL string // default https://github.com
+	// AdminIDs are the GitHub numeric ids allowed to use /v1/admin/ (see
+	// ParseAdminIDs). Empty means there are no admins.
+	AdminIDs []int64
 }
 
 type Service struct {
 	store *store.Store
 	cfg   Config
 	hc    *http.Client
+	admin map[int64]bool
 }
 
 func New(st *store.Store, cfg Config) *Service {
@@ -43,8 +49,39 @@ func New(st *store.Store, cfg Config) *Service {
 	}
 	cfg.APIURL = strings.TrimRight(cfg.APIURL, "/")
 	cfg.OAuthURL = strings.TrimRight(cfg.OAuthURL, "/")
-	return &Service{store: st, cfg: cfg, hc: &http.Client{Timeout: 15 * time.Second}}
+	admin := map[int64]bool{}
+	for _, id := range cfg.AdminIDs {
+		admin[id] = true
+	}
+	return &Service{store: st, cfg: cfg, hc: &http.Client{Timeout: 15 * time.Second}, admin: admin}
 }
+
+// ParseAdminIDs parses the ADMIN_GITHUB_IDS value: comma-separated positive
+// GitHub numeric ids. Whitespace around entries and empty entries are ignored;
+// an empty value means no admins. Anything non-numeric is an error, because
+// silently dropping an entry would hide a typo in a security setting.
+func ParseAdminIDs(v string) ([]int64, error) {
+	var out []int64
+	seen := map[int64]bool{}
+	for _, f := range strings.Split(v, ",") {
+		f = strings.TrimSpace(f)
+		if f == "" {
+			continue
+		}
+		id, err := strconv.ParseInt(f, 10, 64)
+		if err != nil || id <= 0 {
+			return nil, fmt.Errorf("ADMIN_GITHUB_IDS: %q is not a GitHub numeric user id (use ids, not logins; e.g. ADMIN_GITHUB_IDS=139420415)", f)
+		}
+		if !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	return out, nil
+}
+
+// IsAdmin reports whether GitHub user id is configured as an admin.
+func (s *Service) IsAdmin(id int64) bool { return s.admin[id] }
 
 // Handler serves /v1/auth/*.
 func (s *Service) Handler() http.Handler {
@@ -84,6 +121,16 @@ func (s *Service) Authenticate(r *http.Request) (int64, string, bool) {
 		if !errors.Is(err, store.ErrNotFound) {
 			log.Printf("auth: token lookup: %v", err)
 		}
+		return 0, "", false
+	}
+	// A banned user's existing tokens stop working. Fail closed if the check
+	// itself errors.
+	banned, err := s.store.IsBanned(id)
+	if err != nil {
+		log.Printf("auth: ban lookup: %v", err)
+		return 0, "", false
+	}
+	if banned {
 		return 0, "", false
 	}
 	return id, login, true
@@ -200,6 +247,18 @@ func (s *Service) token(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("auth: fetch user: %v", err)
 		writeErr(w, http.StatusBadGateway, "could not fetch your GitHub profile")
+		return
+	}
+	// The device start step cannot know who is logging in; this is the first
+	// point the user id is known. Refuse before writing anything.
+	banned, err := s.store.IsBanned(id)
+	if err != nil {
+		log.Printf("auth: ban lookup: %v", err)
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if banned {
+		writeErr(w, http.StatusForbidden, "this account is banned from the registry")
 		return
 	}
 	if err := s.store.UpsertUser(id, login); err != nil {

@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -57,6 +58,18 @@ func fetch(c *client.Client, owner, name, spec string) ([]byte, client.Resolved,
 	return b, res, nil
 }
 
+// failFetch prints a fetch error for command cmd. A removed version prints
+// just "removed by the registry: <reason>"; anything else gets the usual
+// "capm <cmd>: " prefix.
+func failFetch(stderr io.Writer, cmd string, err error) {
+	var re *client.RemovedError
+	if errors.As(err, &re) {
+		fmt.Fprintln(stderr, err)
+		return
+	}
+	fmt.Fprintf(stderr, "capm %s: %v\n", cmd, err)
+}
+
 func warnYanked(stderr io.Writer, owner, name string, r client.Resolved) {
 	if r.Warning == "yanked" || r.Yanked {
 		fmt.Fprintf(stderr, "warning: %s/%s@%s has been yanked by its owner; use it with care\n", owner, name, r.Version)
@@ -87,7 +100,7 @@ func pull(args []string, stdout, stderr io.Writer, e env) int {
 	}
 	tarball, res, err := fetch(client.New(e.registry, ""), owner, name, spec)
 	if err != nil {
-		fmt.Fprintf(stderr, "capm pull: %v\n", err)
+		failFetch(stderr, "pull", err)
 		return 1
 	}
 	// Unpack beside the destination, then rename, so a failure leaves nothing behind.

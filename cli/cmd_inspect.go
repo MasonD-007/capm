@@ -53,12 +53,12 @@ func inspectRemote(owner, name, spec string, stdout, stderr io.Writer, e env) in
 	c := client.New(e.registry, "")
 	res, err := resolveChecked(c, owner, name, spec)
 	if err != nil {
-		fmt.Fprintf(stderr, "capm inspect: %v\n", err)
+		failFetch(stderr, "inspect", err)
 		return 1
 	}
 	md, err := c.Metadata(owner, name, res.Version)
 	if err != nil {
-		fmt.Fprintf(stderr, "capm inspect: %v\n", err)
+		failFetch(stderr, "inspect", err)
 		return 1
 	}
 	m := &md.Manifest

@@ -27,6 +27,8 @@ type env struct {
 	readSecret func(prompt string) (string, error) // no-echo prompt
 	runner     sbx.Runner
 	tempRoot   string // parent for temp dirs; "" means os.TempDir()
+
+	upd updateEnv // self-update and the update notice (updatecheck.go)
 }
 
 // version is set at build time with -ldflags "-X main.version=<commit>".
@@ -66,6 +68,7 @@ Commands:
   search    Find bundles whose owner, name or description contains the text
   list      List bundles in the registry, or only one owner's
   known     List the bundles capm remembers (pinned owners); known forget <owner/name>
+  self-update  Replace this binary with the latest release (--check only reports)
   version   Print the capm version
 
 capm run [--yes] [--workdir DIR] [--model-url URL] [--model-key KEY] [--model NAME]
@@ -165,6 +168,8 @@ func runEnv(args []string, stdout, stderr io.Writer, e env) int {
 		return list(args[1:], stdout, stderr, e)
 	case "known":
 		return knownCmd(args[1:], stdout, stderr, e)
+	case "self-update":
+		return selfUpdate(args[1:], stdout, stderr, e)
 	case "version":
 		fmt.Fprintf(stdout, "capm %s\n", version)
 		return 0

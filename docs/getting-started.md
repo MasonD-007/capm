@@ -166,6 +166,19 @@ manifest of the last run you confirmed. Nothing is written when you only
   everything. A corrupt file is ignored with a warning and replaced on the next
   recorded run.
 
+### README on the website
+
+A bundle may include a `README.md` at its root (a regular file; a symlink,
+a directory or a README in a subfolder is ignored). `capm push` packs it
+without it being listed in `context`, and the registry shows it on the bundle's
+web page under "README: from the author, unverified". It is stored at publish
+time, capped at 64 KiB (longer text is cut with a marker line; invalid UTF-8 is
+replaced), and not checked by the registry. The website renders Markdown with
+raw HTML off and does not load images. Versions published before this feature
+have no README; publish a new version to add one. Note that clients older than
+this release refuse to unpack a bundle that contains an undeclared `README.md`,
+so update the CLI before relying on it.
+
 ### Environment variables the CLI reads
 
 | Variable | Used by | Meaning |

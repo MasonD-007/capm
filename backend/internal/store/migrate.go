@@ -25,6 +25,7 @@ var migrations = []migration{
 	migrateV3,
 	migrateV4,
 	migrateV5,
+	migrateV6,
 }
 
 // migrateV1 is the schema as it existed before migrations were introduced.
@@ -132,6 +133,30 @@ CREATE TABLE quota_overrides (
 // release's Publish omits the column and gets the default.
 func migrateV5(tx *sql.Tx) error {
 	_, err := tx.Exec(`ALTER TABLE versions ADD COLUMN readme TEXT NOT NULL DEFAULT ''`)
+	return err
+}
+
+// migrateV6 adds download counts: one row per (owner, name, version, UTC day)
+// holding that day's request count (day = days since the Unix epoch; the
+// sentinel day 0 holds the rolled-up history, see rollupDownloads). A pure
+// table addition: a rolled-back release neither reads nor writes it, and
+// versions it publishes simply have no rows (zero downloads).
+//
+// downloads_day exists for the 30-day aggregation, which filters on day alone
+// (the primary key leads with owner_id, so it cannot serve that range). It
+// covers owner_id, name, version and count, so the range scan never touches
+// the table. Cost: each increment also updates this index.
+func migrateV6(tx *sql.Tx) error {
+	_, err := tx.Exec(`
+CREATE TABLE downloads (
+	owner_id INTEGER NOT NULL,
+	name     TEXT NOT NULL,
+	version  TEXT NOT NULL,
+	day      INTEGER NOT NULL,
+	count    INTEGER NOT NULL,
+	PRIMARY KEY(owner_id, name, version, day)
+);
+CREATE INDEX downloads_day ON downloads(day, owner_id, name, version, count);`)
 	return err
 }
 

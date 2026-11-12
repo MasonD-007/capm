@@ -93,6 +93,7 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/auth/device", s.device)
 	mux.HandleFunc("POST /v1/auth/token", s.token)
 	mux.HandleFunc("GET /v1/auth/me", s.me)
+	mux.HandleFunc("GET /v1/auth/usage", s.usage)
 	mux.HandleFunc("GET /v1/auth/tokens", s.listTokens)
 	mux.HandleFunc("DELETE /v1/auth/tokens/current", s.revokeCurrent)
 	mux.HandleFunc("DELETE /v1/auth/tokens/{id}", s.revokeToken)
@@ -334,6 +335,24 @@ func (s *Service) expiry() time.Time {
 		return time.Time{}
 	}
 	return time.Now().Add(s.cfg.TokenTTL)
+}
+
+// usage reports the caller's storage usage and the limits that apply to them
+// (0 = unlimited).
+func (s *Service) usage(w http.ResponseWriter, r *http.Request) {
+	tk, _, ok := s.authenticateToken(r)
+	if !ok {
+		writeErr(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	u, err := s.store.Usage(tk.UserID)
+	if err != nil {
+		log.Printf("auth: usage: %v", err)
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	writeJSON(w, 200, map[string]int64{"bytes": u.Bytes, "maxBytes": u.MaxBytes,
+		"bundles": u.Bundles, "maxBundles": u.MaxBundles, "maxBundleVersions": u.MaxBundleVersions})
 }
 
 // me reports the identity a bearer token belongs to.

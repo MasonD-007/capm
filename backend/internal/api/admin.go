@@ -44,6 +44,8 @@ func (a *API) mountAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/admin/users/{user}/ban", a.adminBan)
 	mux.HandleFunc("DELETE /v1/admin/users/{user}/ban", a.adminUnban)
 	mux.HandleFunc("DELETE /v1/admin/users/{user}/tokens", a.adminRevokeTokens)
+	mux.HandleFunc("GET /v1/admin/users/{user}/quota", a.adminGetQuota)
+	mux.HandleFunc("PUT /v1/admin/users/{user}/quota", a.adminSetQuota)
 	mux.HandleFunc("GET /v1/admin/log", a.adminLog)
 }
 

@@ -323,7 +323,11 @@ func (a *API) publish(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	// A publish rejected by a quota still counts against the hourly allowance
+	// (Allow above already recorded it). Refunding it would let a user parked
+	// at their limit upload and have unpacked 5 MiB bodies without bound.
 	err = a.store.Publish(id, login, name, version, body)
+	var qe *store.QuotaError
 	switch {
 	case err == nil:
 		writeJSON(w, 201, map[string]string{"owner": login, "name": name, "version": version})
@@ -331,6 +335,12 @@ func (a *API) publish(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err.Error())
 	case errors.Is(err, store.ErrVersionExists):
 		writeErr(w, 409, "version already exists")
+	case errors.As(err, &qe) && qe.Limit == store.LimitTotalBytes:
+		// The registry's own numbers are not the publisher's business.
+		writeJSON(w, http.StatusInsufficientStorage, map[string]any{"error": qe.Error(), "limit": qe.Limit})
+	case errors.As(err, &qe):
+		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{
+			"error": qe.Error(), "limit": qe.Limit, "used": qe.Used, "max": qe.Max})
 	default:
 		internal(w, err)
 	}

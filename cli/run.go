@@ -84,6 +84,8 @@ func runEnv(args []string, stdout, stderr io.Writer, e env) int {
 		return 0
 	}
 	switch args[0] {
+	case "admin":
+		return admin(args[1:], stdout, stderr, e)
 	case "inspect":
 		return inspect(args[1:], stdout, stderr, e)
 	case "login":

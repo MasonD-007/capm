@@ -140,6 +140,11 @@ func runCmd(args []string, stdout, stderr io.Writer, e env) int {
 			defer os.RemoveAll(bundleDir)
 		}
 		if err != nil {
+			var re *client.RemovedError
+			if errors.As(err, &re) {
+				fmt.Fprintln(stderr, err)
+				return 1
+			}
 			return fail("%v", err)
 		}
 		fmt.Fprintf(stderr, "running registry %s/%s@%s\n", owner, name, res.Version)

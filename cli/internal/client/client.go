@@ -99,6 +99,19 @@ func (e *APIError) Error() string {
 	return fmt.Sprintf("registry error (%d): %s", e.Status, Sanitize(e.Msg))
 }
 
+// RemovedError is a 410 Gone: an admin took the version down. Reason is the
+// admin's text and untrusted; Error() sanitises it for the terminal.
+type RemovedError struct {
+	Reason string
+}
+
+func (e *RemovedError) Error() string {
+	if r := Sanitize(e.Reason); r != "" {
+		return "removed by the registry: " + r
+	}
+	return "removed by the registry"
+}
+
 type Client struct {
 	base  string
 	token string
@@ -144,7 +157,7 @@ func (c *Client) do(method, path string, body []byte, max int64) ([]byte, error)
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
 	if body != nil {
-		if strings.Contains(path, "/auth/") {
+		if strings.Contains(path, "/auth/") || strings.Contains(path, "/admin/") {
 			req.Header.Set("Content-Type", "application/json")
 		} else {
 			req.Header.Set("Content-Type", "application/gzip")
@@ -168,11 +181,18 @@ func (c *Client) do(method, path string, body []byte, max int64) ([]byte, error)
 	}
 	if resp.StatusCode/100 != 2 {
 		var e struct {
-			Error string `json:"error"`
+			Error  string `json:"error"`
+			Reason string `json:"reason"`
 		}
 		msg := ""
 		if json.Unmarshal(b, &e) == nil {
 			msg = e.Error
+		}
+		if resp.StatusCode == http.StatusGone {
+			if e.Reason == "" {
+				e.Reason = strings.TrimPrefix(msg, "removed by the registry: ")
+			}
+			return nil, &RemovedError{Reason: e.Reason}
 		}
 		if msg == "" {
 			msg = http.StatusText(resp.StatusCode)
@@ -304,5 +324,72 @@ func (c *Client) ListBundles(q, owner string, limit, offset int) ([]BundleInfo, 
 	}
 	var out []BundleInfo
 	err := c.getJSON("/v1/bundles?"+v.Encode(), &out)
+	return out, err
+}
+
+// AdminAction is one row of the admin audit log.
+type AdminAction struct {
+	ID        int64     `json:"id"`
+	AdminID   int64     `json:"adminId"`
+	Admin     string    `json:"admin"`
+	Action    string    `json:"action"`
+	Target    string    `json:"target"`
+	Reason    string    `json:"reason"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+// AdminResult is the registry's reply to an admin remove or restore.
+type AdminResult struct {
+	Versions     []string `json:"versions"`
+	BlobsDeleted int      `json:"blobsDeleted"`
+	Restored     []string `json:"restored"`
+	Skipped      []string `json:"skipped"`
+}
+
+func bundlePath(owner, name, version string) string {
+	if version == "" {
+		return "/v1/admin/bundles/" + esc(owner, name) + "/remove"
+	}
+	return "/v1/admin/bundles/" + esc(owner, name, version) + "/remove"
+}
+
+func (c *Client) adminJSON(method, path string, body any, out any) error {
+	var rb []byte
+	if body != nil {
+		rb, _ = json.Marshal(body)
+	}
+	b, err := c.do(method, path, rb, MaxJSONBytes)
+	if err != nil || out == nil {
+		return err
+	}
+	return json.Unmarshal(b, out)
+}
+
+// AdminRemove takes down one version, or every version when version is "".
+func (c *Client) AdminRemove(owner, name, version, reason string) (AdminResult, error) {
+	var r AdminResult
+	err := c.adminJSON("POST", bundlePath(owner, name, version), map[string]string{"reason": reason}, &r)
+	return r, err
+}
+
+// AdminRestore undoes AdminRemove.
+func (c *Client) AdminRestore(owner, name, version string) (AdminResult, error) {
+	var r AdminResult
+	err := c.adminJSON("DELETE", bundlePath(owner, name, version), nil, &r)
+	return r, err
+}
+
+// AdminBan bans a user given as a login or a numeric GitHub id.
+func (c *Client) AdminBan(user, reason string) error {
+	return c.adminJSON("POST", "/v1/admin/users/"+esc(user)+"/ban", map[string]string{"reason": reason}, nil)
+}
+
+func (c *Client) AdminUnban(user string) error {
+	return c.adminJSON("DELETE", "/v1/admin/users/"+esc(user)+"/ban", nil, nil)
+}
+
+func (c *Client) AdminLog(limit int) ([]AdminAction, error) {
+	var out []AdminAction
+	err := c.getJSON("/v1/admin/log?limit="+strconv.Itoa(limit), &out)
 	return out, err
 }

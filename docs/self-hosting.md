@@ -103,7 +103,7 @@ alone does not restart pods). Read the trust caveat in
 
 ## Pausing ArgoCD for maintenance
 
-The restore and takedown procedures need the backend scaled to 0. The
+The restore procedure (and the SQL fallback of the takedown runbook) needs the backend scaled to 0. The
 Application has `selfHeal: true`, so ArgoCD would scale it back to 1 within
 moments. Turn automated sync off for the duration, and back on afterwards.
 
@@ -123,7 +123,7 @@ Resuming syncs the Application, which restores the backend to the
 
 ## Maintenance pod
 
-Restore and takedown both use a one-off pod built from the backup image (it has
+Restore and the takedown runbook's SQL fallback use a one-off pod built from the backup image (it has
 `restic` and `sqlite3`). It mounts `capm-data` at `/data` and gets the
 `backup-secrets` environment. Only start it after the backend is at 0 replicas:
 `capm-data` is `ReadWriteOnce`, and SQLite must have a single writer.
@@ -265,102 +265,129 @@ must run `capm login` again.
 
 ## Takedown runbook
 
-capm v1 has no admin endpoints. The owner can yank a version, but nobody else
-can, and tokens cannot be revoked (see
-[security-notes.md](security-notes.md)). This runbook is a stand-in: you edit
-the SQLite database directly with the backend stopped. It is for malware,
-illegal content and compromised accounts, not routine use.
+Use the registry's admin API through `capm admin`. It is for malware, illegal
+content and abusive accounts, not routine use. An owner can only yank their own
+versions, and a yank is advisory (see below); removal and bans are admin-only.
 
-Follow [Maintenance pod](#maintenance-pod) up to the `kubectl exec` shell, then
-open the database:
+### Prerequisites
+
+- Your GitHub numeric id is in `ADMIN_GITHUB_IDS` (comma-separated ids, never
+  logins) in `k3s/apps/backend/configmap.yaml`. Changing it needs a backend
+  restart (`kubectl -n capm rollout restart deploy/backend`), since a ConfigMap
+  change alone does not restart pods. A malformed value stops the server from
+  starting, with the offending entry in the log.
+- You are logged in as that account (`capm login`). Anyone else gets
+  `not found (are you an admin on this registry?)`: `/v1/admin/*` answers 404
+  to everyone who is not an admin, so it is not advertised.
+
+### Commands
 
 ```sh
-sqlite3 /data/capm.db
+capm admin remove  alice/my-bundle@1.0.0 --reason "contains credential stealer"
+capm admin remove  alice/my-bundle       --reason "malware"       # every version
+capm admin restore alice/my-bundle@1.0.0                          # undo a removal
+capm admin ban     alice  --reason "publishing malware"           # login or numeric id
+capm admin unban   alice
+capm admin log                                                    # audit trail, newest first
 ```
 
-The relevant schema, from `backend/internal/store/store.go`:
+`--reason` is required for `remove` and `ban` (at most 500 characters). It is
+shown to users, so write it for them.
+
+### What each action does
+
+- **Yank** (owner's `capm`/API call, not an admin action) only hides a version
+  from `latest` and adds a warning. Anyone can still pull the exact version.
+  Yank is not a takedown.
+- **Remove** marks the version removed with your reason. `download`, `metadata`
+  and `resolve` then return `410 Gone` with the reason, and `capm pull`, `run`
+  and `inspect` print `removed by the registry: <reason>` and exit 1. Removed
+  versions are skipped when computing `latest`, stay in the versions list
+  flagged removed (the website shows the reason and offers no install commands),
+  and their manifest is no longer served. The version row stays, so the number
+  can never be published again. The blob file is deleted unless another live
+  version, of any owner, has the same digest (blobs are content-addressed and
+  shared); the response says how many blobs were deleted.
+- **Restore** brings a removed version back only if its blob still exists. If
+  the blob was deleted you get `409`; put the file back at
+  `/data/blobs/<hex>` (for example from a restic snapshot, see
+  [Restore](#restore)) and retry. For a whole bundle, versions without a blob
+  are skipped and reported.
+- **Ban** stops the user's tokens working (`401`), refuses to issue them a new
+  token at login (`403`), and hides their bundles: they vanish from `list` and
+  `search`, and every direct bundle route answers `404` as if the bundle did not
+  exist. Nothing is deleted; remove their versions separately if needed. Admins
+  cannot be banned. `unban` always works and restores visibility. A ban does not
+  stop someone making a new GitHub account.
+- Every admin action writes a row to `admin_actions` in the same transaction as
+  the change. `capm admin log` shows them.
+
+### Backups
+
+A removed blob is deleted from the volume but stays in restic snapshots until
+they age out (retention: 7 daily, 4 weekly), and so does the old database. In
+urgent cases purge it from R2 as well: find the snapshots with
+`restic snapshots` and run `restic forget --prune <snapshot-id>` for each that
+holds the content. Restoring an old snapshot brings the content back.
+
+### If the API is unusable
+
+If the backend is down or admin login is impossible, edit the database
+directly. Follow [Maintenance pod](#maintenance-pod) (backend at 0 replicas,
+ArgoCD paused) up to the `kubectl exec` shell, then `sqlite3 /data/capm.db`.
+The `sqlite3` shell runs with foreign keys off, so do not delete `users` rows.
+
+Schema (schema version 2; see `backend/internal/store/migrate.go`):
 
 | Table | Columns |
 |---|---|
-| `users` | `id` (GitHub numeric id), `login` (unique, case-insensitive) |
-| `bundles` | `owner_id`, `name`; primary key `(owner_id, name)` |
-| `versions` | `owner_id`, `name`, `version`, `digest` (`sha256:<hex>`), `yanked` (0 or 1), `manifest` (JSON), `created_at` (unix seconds); unique `(owner_id, name, version)` |
-| `tokens` | `hash` (sha256 of the token, BLOB, primary key), `user_id`, `created_at` |
+| `users` | `id` (GitHub numeric id), `login` (unique, case-insensitive; renamed accounts are tombstoned as `~<id>`) |
+| `bundles` | `owner_id`, `name` |
+| `versions` | `owner_id`, `name`, `version`, `digest` (`sha256:<hex>`), `yanked`, `manifest` (JSON), `created_at`, `removed` (0 or 1), `removed_reason` |
+| `tokens` | `hash` (sha256 of the token), `user_id`, `created_at` |
+| `banned_users` | `user_id` (primary key), `reason`, `created_at` |
+| `admin_actions` | `id`, `admin_id`, `action`, `target`, `reason`, `created_at` |
+| `schema_version` | `version` (one row) |
 
-Logins of renamed accounts are tombstoned as `~<id>`; look up by `id` if the
-login does not match.
-
-Find what you are acting on:
-
-```sql
-SELECT u.id, u.login, v.name, v.version, v.digest, v.yanked
-FROM versions v JOIN users u ON u.id = v.owner_id
-WHERE u.login = 'alice';
-```
-
-### Yank a version
+Remove a version, with its audit row (the id is the admin's GitHub id):
 
 ```sql
-UPDATE versions SET yanked = 1
+BEGIN;
+UPDATE versions SET removed = 1, removed_reason = 'contains malware'
 WHERE owner_id = (SELECT id FROM users WHERE login = 'alice')
   AND name = 'my-bundle' AND version = '1.0.0';
 SELECT changes();   -- expect 1
+INSERT INTO admin_actions(admin_id, action, target, reason, created_at)
+VALUES (139420415, 'remove_version', 'alice/my-bundle@1.0.0', 'contains malware', strftime('%s','now'));
+COMMIT;
+
+-- Delete the blob only if this returns 0 (no live version shares the digest):
+SELECT count(*) FROM versions
+WHERE removed = 0 AND digest = (SELECT digest FROM versions
+  WHERE owner_id = (SELECT id FROM users WHERE login = 'alice')
+    AND name = 'my-bundle' AND version = '1.0.0');
 ```
-
-This is the same flag the owner's `POST .../yank` sets. Yanking only hides the
-version from `latest` resolution and adds a warning. **A yanked version can
-still be pulled by anyone who asks for the exact version**, so yank is not a
-takedown of malicious content. For that, remove it as below.
-
-### Remove a version completely
-
-```sql
--- Check whether another version has the same tarball (same digest).
-SELECT owner_id, name, version FROM versions
-WHERE digest = (SELECT digest FROM versions
-                WHERE owner_id = (SELECT id FROM users WHERE login = 'alice')
-                  AND name = 'my-bundle' AND version = '1.0.0');
-
-DELETE FROM versions
-WHERE owner_id = (SELECT id FROM users WHERE login = 'alice')
-  AND name = 'my-bundle' AND version = '1.0.0';
-SELECT changes();   -- expect 1
-
--- Only if no versions of the bundle remain; otherwise it lists as an empty bundle.
-DELETE FROM bundles
-WHERE owner_id = (SELECT id FROM users WHERE login = 'alice') AND name = 'my-bundle';
-```
-
-Then delete the blob, using the hex from the `digest` column without the
-`sha256:` prefix:
 
 ```sh
-rm /data/blobs/<hex>
+rm /data/blobs/<hex>      # the digest without the sha256: prefix
 ```
 
-Consequences, from the code:
+Never `DELETE` a `versions` row: the row is what stops the number being
+published again with different content.
 
-- Blobs are content-addressed and shared. Publishing the same tarball under two
-  versions or two bundles writes one file. Delete the blob only if the first
-  query above shows no other row with that digest; otherwise those versions
-  would still have a row but no file, and downloading them would fail.
-- Delete the row before, or together with, the file. A `versions` row with no
-  blob makes `download` return a 500 (`store.Blob` reads the file after
-  finding the row).
-- Version immutability is enforced by the `UNIQUE(owner_id, name, version)`
-  row. Once the row is gone, the owner can publish that version number again
-  with different content. Clients that saw the old digest will see a different
-  one.
-- Existing restic snapshots still contain the blob and the old database. To
-  purge it from R2 as well, find the snapshots (`restic snapshots`) and run
-  `restic forget --prune <snapshot-id>` for each that holds it, or wait for the
-  retention window (7 daily, 4 weekly) to expire them. Restoring an old
-  snapshot brings the content back.
+Ban a user:
 
-### Invalidate a user's tokens
+```sql
+BEGIN;
+INSERT INTO banned_users(user_id, reason, created_at)
+VALUES ((SELECT id FROM users WHERE login = 'alice'), 'publishing malware', strftime('%s','now'));
+INSERT INTO admin_actions(admin_id, action, target, reason, created_at)
+VALUES (139420415, 'ban_user', 'user:' || (SELECT id FROM users WHERE login = 'alice'), 'publishing malware', strftime('%s','now'));
+COMMIT;
+```
 
-Tokens are stored only as hashes, so you cannot pick out one token from the
-database; delete all of the user's tokens:
+Invalidate a user's tokens (stops existing tokens only; a banned user is
+refused new ones, an unbanned user can log in again):
 
 ```sql
 DELETE FROM tokens
@@ -368,15 +395,29 @@ WHERE user_id = (SELECT id FROM users WHERE login = 'alice');
 SELECT changes();   -- number of tokens removed
 ```
 
-The holder gets `401` on their next request. This does **not** stop them: any
-GitHub account can run `capm login` and receive a new token. Pair it with
-removing what they published, and for sustained abuse block them at
-Cloudflare. Do not delete the `users` row: `bundles` and `tokens` reference it
-(the backend opens the database with foreign keys on, but the `sqlite3` shell
-does not, so it would let you leave orphaned rows).
-
 Leave `sqlite3` with `.quit`, then scale back up as described at the end of
 [Maintenance pod](#maintenance-pod).
+
+## Before deploying a release that migrates the database
+
+The backend applies schema migrations when it starts, so a merge to `main` that
+adds one migrates the live database during the deploy. Migrations are
+additive and each runs in a transaction, but take a manual backup first so
+there is a snapshot from just before:
+
+```sh
+kubectl -n capm create job --from=cronjob/capm-backup backup-pre-migrate
+kubectl -n capm logs -f job/backup-pre-migrate     # wait for it to finish
+kubectl -n capm delete job backup-pre-migrate      # afterwards
+```
+
+Rolling back the image does not undo a migration. The previous release ignores
+the extra columns and tables and keeps working, but removed versions would
+appear live again to it; restore from the snapshot (above) if you need the old
+state exactly. A server refuses to start on a database whose
+`schema_version` is newer than it knows.
+
+Removed blobs remain in restic snapshots (including this one) until they age out.
 
 ## Rollback
 

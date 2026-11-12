@@ -66,7 +66,7 @@ func listBundles(cmd, q, owner string, stdout, stderr io.Writer, e env) int {
 	for _, b := range all {
 		latest := client.Sanitize(b.Latest)
 		if latest == "" {
-			latest = "-" // every version is yanked
+			latest = "-" // every version is yanked or removed
 		}
 		fmt.Fprintf(tw, "%s/%s\t%s\t%s\n", client.Sanitize(b.Owner), client.Sanitize(b.Name), latest, shortDesc(b.Description))
 	}

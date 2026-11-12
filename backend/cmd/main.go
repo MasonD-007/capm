@@ -50,7 +50,18 @@ func main() {
 	}
 	defer st.Close()
 
+	// Admins are GitHub numeric ids. A malformed list is fatal: silently
+	// ignoring a typo in a security setting could lock out the real admin.
+	admins, err := auth.ParseAdminIDs(os.Getenv("ADMIN_GITHUB_IDS"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	if len(admins) == 0 {
+		log.Print("ADMIN_GITHUB_IDS is unset: /v1/admin/* is disabled")
+	}
+
 	authSvc := auth.New(st, auth.Config{
+		AdminIDs: admins,
 		ClientID: os.Getenv("GITHUB_CLIENT_ID"),
 		APIURL:   os.Getenv("GITHUB_API_URL"),
 		OAuthURL: os.Getenv("GITHUB_OAUTH_URL"),
@@ -61,6 +72,7 @@ func main() {
 	reg := api.NewWithConfig(st, authSvc.Authenticate, api.Config{
 		MaxBundleBytes: int64(envInt("MAX_BUNDLE_BYTES", 5<<20)),
 		PublishPerHour: envInt("PUBLISH_RATE_PER_HOUR", 30),
+		IsAdmin:        authSvc.IsAdmin,
 	})
 	// The unauthenticated auth routes proxy to GitHub, so limit them per IP.
 	// X-Forwarded-For is only honoured when TRUSTED_PROXY=true; CLIENT_IP_HEADER

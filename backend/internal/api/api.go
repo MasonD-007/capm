@@ -21,6 +21,9 @@ type Config struct {
 	MaxBundleBytes int64            // PUT body cap; default 5 MiB (MAX_BUNDLE_BYTES)
 	PublishPerHour int              // per authenticated user; default 30 (PUBLISH_RATE_PER_HOUR)
 	Now            func() time.Time // injectable clock for the publish limiter
+	// IsAdmin reports whether a GitHub user id may use /v1/admin/. Nil means
+	// nobody may.
+	IsAdmin func(id int64) bool
 }
 
 // AuthFunc identifies the caller of a write request.
@@ -56,7 +59,8 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("PUT /v1/bundles/{owner}/{name}/{version}", a.publish)
 	mux.HandleFunc("POST /v1/bundles/{owner}/{name}/{version}/yank", a.yank(true))
 	mux.HandleFunc("DELETE /v1/bundles/{owner}/{name}/{version}/yank", a.yank(false))
-	return noTombstones(mux)
+	a.mountAdmin(mux)
+	return a.adminGate(noTombstones(mux))
 }
 
 // noTombstones makes owners whose login contains "~" (tombstoned ids, see
@@ -79,6 +83,13 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	json.NewEncoder(w).Encode(v)
+}
+
+// writeGone is the 410 for a version an admin removed. "error" reads well in
+// older clients that only show that field; "reason" is the admin's text.
+func writeGone(w http.ResponseWriter, reason string) {
+	writeJSON(w, http.StatusGone, map[string]any{
+		"error": "removed by the registry: " + reason, "reason": reason, "removed": true})
 }
 
 func writeErr(w http.ResponseWriter, code int, msg string) {
@@ -221,10 +232,18 @@ func (a *API) versions(w http.ResponseWriter, r *http.Request) {
 		Manifest  manifest.Manifest `json:"manifest"`
 		Summary   manifest.Summary  `json:"summary"`
 		CreatedAt time.Time         `json:"createdAt"`
+		// Removed versions stay listed (their number can never be reused)
+		// but their manifest is withheld: a takedown may be about its content.
+		Removed       bool   `json:"removed"`
+		RemovedReason string `json:"removedReason"`
 	}
 	out := make([]item, 0, len(vs))
 	for _, v := range vs {
-		out = append(out, item{v.Version, v.Digest, v.Yanked, v.Manifest, v.Manifest.EnforcedSummary(), v.CreatedAt})
+		m := v.Manifest
+		if v.Removed {
+			m = manifest.Manifest{}
+		}
+		out = append(out, item{v.Version, v.Digest, v.Yanked, m, m.EnforcedSummary(), v.CreatedAt, v.Removed, v.RemovedReason})
 	}
 	writeJSON(w, 200, out)
 }
@@ -252,11 +271,20 @@ func (a *API) metadata(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, "version not found")
 		return
 	}
+	if pick.Removed {
+		writeGone(w, pick.RemovedReason)
+		return
+	}
 	writeJSON(w, 200, map[string]any{"version": pick.Version, "digest": pick.Digest, "yanked": pick.Yanked, "manifest": pick.Manifest, "summary": pick.Manifest.EnforcedSummary(), "createdAt": pick.CreatedAt})
 }
 
 func (a *API) download(w http.ResponseWriter, r *http.Request) {
 	b, err := a.store.Blob(r.PathValue("owner"), r.PathValue("name"), r.PathValue("version"))
+	var re *store.RemovedError
+	if errors.As(err, &re) {
+		writeGone(w, re.Reason)
+		return
+	}
 	if errors.Is(err, store.ErrNotFound) {
 		writeErr(w, 404, "version not found")
 		return
@@ -353,6 +381,14 @@ func (a *API) resolve(w http.ResponseWriter, r *http.Request) {
 	if rng == "latest" {
 		pick = latestInstallable(vs)
 		if pick == nil {
+			// If a takedown is why nothing is installable, say so (the
+			// newest removed version's reason) instead of a bare 404.
+			for i := len(vs) - 1; i >= 0; i-- {
+				if vs[i].Removed {
+					writeGone(w, vs[i].RemovedReason)
+					return
+				}
+			}
 			writeErr(w, 404, "no installable version: every version of this bundle is yanked")
 			return
 		}
@@ -364,6 +400,10 @@ func (a *API) resolve(w http.ResponseWriter, r *http.Request) {
 		}
 		if pick == nil {
 			writeErr(w, 404, "version not found")
+			return
+		}
+		if pick.Removed {
+			writeGone(w, pick.RemovedReason)
 			return
 		}
 	}
@@ -381,7 +421,7 @@ func latestInstallable(vs []store.Version) *store.Version {
 	var best, bestPre *semver
 	var bv, bpv *store.Version
 	for i := range vs {
-		if vs[i].Yanked {
+		if vs[i].Yanked || vs[i].Removed {
 			continue
 		}
 		sv, ok := parseSemver(vs[i].Version)

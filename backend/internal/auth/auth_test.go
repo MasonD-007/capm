@@ -3,6 +3,7 @@ package auth_test
 import (
 	"archive/tar"
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 	"github.com/MasonD-007/capm/backend/internal/auth"
 	"github.com/MasonD-007/capm/backend/internal/store"
 	"github.com/MasonD-007/capm/manifest"
+	_ "modernc.org/sqlite"
 )
 
 var _ = tar.TypeReg
@@ -82,9 +84,13 @@ type env struct {
 	gh  *fakeGitHub
 	srv *httptest.Server
 	dir string
+	st  *store.Store
 }
 
-func setup(t *testing.T, clientID string) *env {
+func setup(t *testing.T, clientID string) *env { return setupAdmins(t, clientID, nil) }
+
+// setupAdmins wires the handlers exactly as cmd/main.go does.
+func setupAdmins(t *testing.T, clientID string, admins []int64) *env {
 	t.Helper()
 	gh := newFakeGitHub(t)
 	dir := t.TempDir()
@@ -93,14 +99,14 @@ func setup(t *testing.T, clientID string) *env {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	svc := auth.New(st, auth.Config{ClientID: clientID, APIURL: gh.srv.URL, OAuthURL: gh.srv.URL})
-	reg := api.New(st, svc.Authenticate)
+	svc := auth.New(st, auth.Config{ClientID: clientID, APIURL: gh.srv.URL, OAuthURL: gh.srv.URL, AdminIDs: admins})
+	reg := api.NewWithConfig(st, svc.Authenticate, api.Config{IsAdmin: svc.IsAdmin})
 	mux := http.NewServeMux()
 	mux.Handle("/v1/auth/", svc.Handler())
 	mux.Handle("/v1/", reg.Handler())
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	return &env{gh: gh, srv: srv, dir: dir}
+	return &env{gh: gh, srv: srv, dir: dir, st: st}
 }
 
 func (e *env) do(t *testing.T, method, path, token string, body []byte) (int, []byte) {
@@ -327,5 +333,93 @@ func TestMe(t *testing.T) {
 	}
 	if code, _ := e.do(t, "GET", "/v1/auth/me", "", nil); code != 401 {
 		t.Fatalf("no token: %d", code)
+	}
+}
+
+func TestBannedUser(t *testing.T) {
+	e := setup(t, "cid")
+	tok := e.login(t) // github id 42, alice
+	tb := bundle(t, "x", "1.0.0")
+	if code, b := e.do(t, "PUT", "/v1/bundles/alice/x/1.0.0", tok, tb); code != 201 {
+		t.Fatalf("%d %s", code, b)
+	}
+	if err := e.st.BanUser(1, 42, "spam"); err != nil {
+		t.Fatal(err)
+	}
+	// The existing token stops working everywhere.
+	if code, _ := e.do(t, "GET", "/v1/auth/me", tok, nil); code != 401 {
+		t.Fatalf("me: %d", code)
+	}
+	if code, _ := e.do(t, "PUT", "/v1/bundles/alice/x/2.0.0", tok, bundle(t, "x", "2.0.0")); code != 401 {
+		t.Fatalf("publish: %d", code)
+	}
+	if code, _ := e.do(t, "POST", "/v1/bundles/alice/x/1.0.0/yank", tok, nil); code != 401 {
+		t.Fatalf("yank: %d", code)
+	}
+	// A new login is refused where the user id first becomes known, and no
+	// token row is created.
+	var before, after int
+	before = countTokens(t, e.dir)
+	code, b := e.do(t, "POST", "/v1/auth/token", "", []byte(`{"device_code":"dc1"}`))
+	if code != 403 || !strings.Contains(string(b), "banned") || strings.Contains(string(b), "token\"") {
+		t.Fatalf("token: %d %s", code, b)
+	}
+	after = countTokens(t, e.dir)
+	if before != after {
+		t.Fatalf("a token was issued to a banned user (%d -> %d)", before, after)
+	}
+	// Unban restores everything.
+	if err := e.st.UnbanUser(1, 42); err != nil {
+		t.Fatal(err)
+	}
+	if code, _ := e.do(t, "GET", "/v1/auth/me", tok, nil); code != 200 {
+		t.Fatalf("me after unban: %d", code)
+	}
+	e.login(t)
+}
+
+func countTokens(t *testing.T, dir string) int {
+	t.Helper()
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(dir, "capm.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var n int
+	if err := db.QueryRow(`SELECT count(*) FROM tokens`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+func TestAdminRoutesReachableThroughMux(t *testing.T) {
+	e := setupAdmins(t, "cid", []int64{7})
+	alice := e.login(t) // github id 42: not an admin
+	if code, b := e.do(t, "PUT", "/v1/bundles/alice/x/1.0.0", alice, bundle(t, "x", "1.0.0")); code != 201 {
+		t.Fatalf("%d %s", code, b)
+	}
+	body := []byte(`{"reason":"test"}`)
+	for _, tok := range []string{"", "garbage", alice} {
+		if code, _ := e.do(t, "POST", "/v1/admin/bundles/alice/x/1.0.0/remove", tok, body); code != 404 {
+			t.Fatalf("token %q: %d, want 404", tok, code)
+		}
+	}
+	e.gh.set("", 7, "root")
+	admin := e.login(t)
+	if code, b := e.do(t, "POST", "/v1/admin/bundles/alice/x/1.0.0/remove", admin, body); code != 200 {
+		t.Fatalf("admin remove: %d %s", code, b)
+	}
+	if code, _ := e.do(t, "GET", "/v1/bundles/alice/x/1.0.0/download", "", nil); code != 410 {
+		t.Fatalf("download: %d", code)
+	}
+	if code, b := e.do(t, "POST", "/v1/admin/users/alice/ban", admin, body); code != 200 {
+		t.Fatalf("ban: %d %s", code, b)
+	}
+	if code, _ := e.do(t, "GET", "/v1/auth/me", alice, nil); code != 401 {
+		t.Fatalf("banned token: %d", code)
+	}
+	// Banning is not the admin's own undoing: an admin token is unaffected.
+	if code, _ := e.do(t, "GET", "/v1/admin/log", admin, nil); code != 200 {
+		t.Fatalf("log: %d", code)
 	}
 }

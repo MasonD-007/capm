@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, getBundle, listBundles, latestNonYanked } from "./api";
+import { ApiError, getBundle, isRemoved, listBundles, latestNonYanked } from "./api";
 
 function mockFetch(status: number, body: unknown) {
   const f = vi.fn(async () => new Response(JSON.stringify(body), { status }));
@@ -77,5 +77,33 @@ describe("latestNonYanked", () => {
   });
   it("is undefined when all yanked", () => {
     expect(latestNonYanked([v("1.0.0", true)])).toBeUndefined();
+  });
+});
+
+describe("removed versions", () => {
+  it("getBundle passes removed and removedReason through", async () => {
+    mockFetch(200, [
+      { version: "1.0.0", yanked: false, removed: false, removedReason: "" },
+      { version: "1.1.0", yanked: false, removed: true, removedReason: "malware" },
+    ]);
+    const out = await getBundle("alice", "x");
+    expect(out[1].removed).toBe(true);
+    expect(out[1].removedReason).toBe("malware");
+    expect(isRemoved(out[1])).toBe(true);
+    expect(isRemoved(out[0])).toBe(false);
+  });
+
+  it("isRemoved is false for an older server that omits the field", () => {
+    const v: { removed?: boolean } = {};
+    expect(isRemoved(v)).toBe(false);
+  });
+
+  it("latestNonYanked skips removed versions", () => {
+    const vs = [
+      { version: "1.0.0", yanked: false, removed: false },
+      { version: "2.0.0", yanked: false, removed: true },
+    ];
+    expect(latestNonYanked(vs)?.version).toBe("1.0.0");
+    expect(latestNonYanked([{ version: "1.0.0", yanked: false, removed: true }])).toBeUndefined();
   });
 });

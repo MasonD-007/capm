@@ -44,9 +44,22 @@ export type BundleVersion = {
   digest: string;
   yanked: boolean;
   createdAt: string;
+  /**
+   * An admin took this version down. The registry withholds its manifest, so
+   * `manifest` and `summary` are empty for removed versions: never render
+   * install commands or permissions for them. Absent on older servers.
+   */
+  removed?: boolean;
+  /** The admin's reason; untrusted text. */
+  removedReason?: string;
   manifest: { metadata: { name: string; version: string; description?: string } };
   summary: Summary;
 };
+
+/** True when an admin removed the version (false on servers that predate removal). */
+export function isRemoved(v: { removed?: boolean }): boolean {
+  return v.removed === true;
+}
 
 export class ApiError extends Error {
   constructor(
@@ -133,14 +146,14 @@ function cmp(a: Parsed, b: Parsed): number {
   return 0;
 }
 
-/** Highest non-yanked version, releases before prereleases (as the registry's /resolve does). */
-export function latestNonYanked<T extends { version: string; yanked: boolean }>(
+/** Highest non-yanked, non-removed version, releases before prereleases (as the registry's /resolve does). */
+export function latestNonYanked<T extends { version: string; yanked: boolean; removed?: boolean }>(
   vs: T[],
 ): T | undefined {
   let rel: [T, Parsed] | undefined;
   let pre: [T, Parsed] | undefined;
   for (const v of vs) {
-    if (v.yanked) continue;
+    if (v.yanked || isRemoved(v)) continue;
     const p = parse(v.version);
     if (!p) continue;
     if (p.pre.length === 0) {

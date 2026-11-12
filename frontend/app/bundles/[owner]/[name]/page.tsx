@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
-import { ApiError, getBundle, latestNonYanked, noticeTexts } from "@/lib/api";
+import { ApiError, getBundle, isRemoved, latestNonYanked, noticeTexts } from "@/lib/api";
 import type { BundleVersion } from "@/lib/api";
 import { cliCommands } from "@/lib/commands";
 import { clean } from "@/lib/text";
@@ -48,12 +48,28 @@ async function Detail({ params, searchParams }: Props) {
   if (!selected) notFound();
 
   const id = `${clean(owner)}/${clean(name)}`;
+  const removed = isRemoved(selected);
   const description = clean(selected.manifest?.metadata?.description);
-  const cmd = cliCommands(owner, name, selected.version);
+  // A removed version has no manifest to show, and must never be offered for
+  // install: skip the command block, description and permissions for it.
+  const cmd = removed ? null : cliCommands(owner, name, selected.version);
   return (
     <>
       <h1 className="mt-4 font-mono text-3xl font-semibold tracking-tight">{id}</h1>
 
+      {removed && (
+        <section role="alert" className="mt-6 rounded border border-red-400 p-4 text-red-800 dark:text-red-300">
+          <h2 className="font-semibold">
+            Version {clean(selected.version)} was removed by the registry
+          </h2>
+          <p className="mt-1 whitespace-pre-wrap text-sm">
+            Reason (written by a registry admin): {clean(selected.removedReason) || "(none given)"}
+          </p>
+          <p className="mt-1 text-sm">It cannot be installed, and its version number cannot be reused.</p>
+        </section>
+      )}
+
+      {cmd && (
       <section className="mt-6">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">
           Inspect, then run (version {clean(selected.version)})
@@ -71,6 +87,7 @@ async function Detail({ params, searchParams }: Props) {
           shown under Network below.
         </p>
       </section>
+      )}
 
       <section className="mt-8">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">Versions</h2>
@@ -84,10 +101,11 @@ async function Detail({ params, searchParams }: Props) {
                   v.version === selected.version
                     ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-black"
                     : "border-zinc-300 dark:border-zinc-700"
-                } ${v.yanked ? "line-through" : ""}`}
+                } ${v.yanked || isRemoved(v) ? "line-through" : ""}`}
               >
                 {clean(v.version)}
                 {v.yanked && <span className="ml-1 no-underline">(yanked)</span>}
+                {isRemoved(v) && <span className="ml-1 no-underline">(removed)</span>}
               </Link>
             </li>
           ))}
@@ -103,7 +121,7 @@ async function Detail({ params, searchParams }: Props) {
         </p>
       </section>
 
-      {description && (
+      {!removed && description && (
         <section className="mt-8 rounded border border-dashed border-zinc-300 p-4 dark:border-zinc-700">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">
             Author&apos;s description (unverified)
@@ -112,7 +130,7 @@ async function Detail({ params, searchParams }: Props) {
         </section>
       )}
 
-      <Permissions s={selected.summary} />
+      {!removed && <Permissions s={selected.summary} />}
     </>
   );
 }

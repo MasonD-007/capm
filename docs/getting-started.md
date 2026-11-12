@@ -114,13 +114,24 @@ capm version                       # which build you are running
 
 `search` and `list` need no login. They print one bundle per line (name, latest
 installable version, first line of its description) and show `-` as the
-version when every version is yanked. Descriptions are written by the
-bundle's author and unverified. Output stops at 2000 bundles; narrow it with
+version when every version is yanked. When the registry flags any bundle, a
+marker column appears before the description: `!!` means a high risk label and
+`!` a caution one. That marker is the registry's claim, and a blank is not an
+endorsement (it also appears for info-only bundles and registries that do not
+report risk); `capm inspect` shows the labels computed locally. Descriptions
+are written by the bundle's author and unverified. Output stops at 2000 bundles; narrow it with
 `search`.
 
 `inspect` and `run` also take a local bundle directory. Omitting `@version`
 means the latest non-yanked version. Always pin the version you inspected:
 the latest version can change between `inspect` and `run`.
+
+`inspect` ends with a "Risk labels" section, and `run` prints the same section
+before it asks you to confirm. The labels are computed locally from the
+manifest and describe what the bundle declares it can reach (read-write
+mounts, many egress hosts, secrets, MCP servers, context files); they are not
+a review, and no labels is not an endorsement. See "What the risk labels mean"
+in the security notes for every rule.
 
 `capm run` shows the declared permissions and its run plan, asks you to
 confirm (`--yes` skips the question), then drives sbx. Today it always needs

@@ -108,6 +108,10 @@ func Sanitize(s string) string {
 type APIError struct {
 	Status int
 	Msg    string
+	// Limit names the quota that rejected a publish ("user_bytes",
+	// "user_bundles", "bundle_versions", "total_bytes"); empty for every other
+	// error, including the plain "bundle too large" 413.
+	Limit string
 }
 
 func (e *APIError) Error() string {
@@ -200,6 +204,7 @@ func (c *Client) do(method, path string, body []byte, max int64) ([]byte, error)
 		var e struct {
 			Error  string `json:"error"`
 			Reason string `json:"reason"`
+			Limit  string `json:"limit"`
 		}
 		msg := ""
 		if json.Unmarshal(b, &e) == nil {
@@ -214,7 +219,7 @@ func (c *Client) do(method, path string, body []byte, max int64) ([]byte, error)
 		if msg == "" {
 			msg = http.StatusText(resp.StatusCode)
 		}
-		return nil, &APIError{Status: resp.StatusCode, Msg: msg}
+		return nil, &APIError{Status: resp.StatusCode, Msg: msg, Limit: e.Limit}
 	}
 	return b, nil
 }
@@ -340,6 +345,51 @@ func (c *Client) AdminRevokeTokens(user string) (int, error) {
 	}
 	err := c.adminJSON("DELETE", "/v1/admin/users/"+esc(user)+"/tokens", nil, &out)
 	return out.Revoked, err
+}
+
+// Usage is the caller's storage use and limits (a Max of 0 means unlimited).
+type Usage struct {
+	Bytes             int64 `json:"bytes"`
+	MaxBytes          int64 `json:"maxBytes"`
+	Bundles           int64 `json:"bundles"`
+	MaxBundles        int64 `json:"maxBundles"`
+	MaxBundleVersions int64 `json:"maxBundleVersions"`
+}
+
+// Usage fetches the caller's usage. A registry that predates quotas answers
+// with an error for which IsUnsupported is true.
+func (c *Client) Usage() (Usage, error) {
+	var u Usage
+	err := c.getJSON("/v1/auth/usage", &u)
+	return u, err
+}
+
+// Quota is an admin's view of one user's usage and limits.
+type Quota struct {
+	ID                int64 `json:"id"`
+	Bytes             int64 `json:"bytes"`
+	MaxBytes          int64 `json:"maxBytes"`
+	Bundles           int64 `json:"bundles"`
+	MaxBundles        int64 `json:"maxBundles"`
+	MaxBundleVersions int64 `json:"maxBundleVersions"`
+	BytesOverridden   bool  `json:"bytesOverridden"`
+	BundlesOverridden bool  `json:"bundlesOverridden"`
+}
+
+// AdminQuota shows a user's (login or numeric id) usage and limits.
+func (c *Client) AdminQuota(user string) (Quota, error) {
+	var q Quota
+	err := c.getJSON("/v1/admin/users/"+esc(user)+"/quota", &q)
+	return q, err
+}
+
+// AdminSetQuota replaces a user's overrides; nil clears that override (the
+// default applies) and 0 means unlimited.
+func (c *Client) AdminSetQuota(user string, maxBytes, maxBundles *int64) (Quota, error) {
+	var q Quota
+	err := c.adminJSON("PUT", "/v1/admin/users/"+esc(user)+"/quota",
+		map[string]*int64{"maxBytes": maxBytes, "maxBundles": maxBundles}, &q)
+	return q, err
 }
 
 func (c *Client) Publish(owner, name, version string, tarball []byte) error {

@@ -58,6 +58,8 @@ type fakeRegistry struct {
 	pushPath string
 	pushCode int // override publish status when non-zero
 	pushMsg  string
+	// pushLimit, when set, is sent as the "limit" field of the error (quota rejections).
+	pushLimit string
 
 	userCode, verifyURI string // override device-flow fields
 	digest, meLogin     string
@@ -117,7 +119,11 @@ func newFakeRegistry(t *testing.T) *fakeRegistry {
 			if msg == "" {
 				msg = "version already exists"
 			}
-			json.NewEncoder(w).Encode(map[string]string{"error": msg})
+			body := map[string]string{"error": msg}
+			if f.pushLimit != "" {
+				body["limit"] = f.pushLimit
+			}
+			json.NewEncoder(w).Encode(body)
 			return
 		}
 		w.WriteHeader(201)

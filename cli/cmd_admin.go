@@ -20,6 +20,9 @@ Usage:
   capm admin ban     <login|id> --reason TEXT               block a user and hide their bundles
   capm admin unban   <login|id>                             lift a ban
   capm admin revoke-tokens <login|id>                       revoke every login token of a user (they must log in again)
+  capm admin quota   <login|id> [--bytes SIZE] [--bundles N] [--reset]
+                                                            show a user's storage use and limits; set per-user limits
+                                                            (SIZE like 500MiB or 2GiB; 0 = unlimited; --reset restores the defaults)
   capm admin log                                            show the audit log of admin actions
 
 Admins are GitHub numeric ids configured on the registry (ADMIN_GITHUB_IDS).
@@ -71,6 +74,9 @@ func admin(args []string, stdout, stderr io.Writer, e env) int {
 		return 0
 	}
 	sub := args[0]
+	if sub == "quota" {
+		return adminQuota(args[1:], stdout, stderr, e)
+	}
 	pos, reason, err := adminArgs(args[1:])
 	bad := func(msg string) int {
 		fmt.Fprintf(stderr, "capm admin %s: %s\n\n%s", sub, msg, adminUsage)

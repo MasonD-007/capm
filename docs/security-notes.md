@@ -115,20 +115,48 @@ per-run sbx secrets and MCP registrations (a killed `capm run` can leave
 `capm-*` registrations behind; remove them with `sbx mcp rm` and
 `sbx secret rm`).
 
+## Yank is advisory; removal and bans are the takedown
+
+A yank is the owner's "please don't use this". It is **not** a takedown: it
+only hides the version from `latest` and adds a warning, and anyone who asks
+for the exact version still gets it. That is deliberate, so an owner cannot
+break people who pinned a version. Do not treat a yanked bundle as safe, and do
+not expect yank to remove anything.
+
+Registry admins (GitHub numeric ids in `ADMIN_GITHUB_IDS`) have two stronger
+tools, used through `capm admin` (runbook in
+[self-hosting.md](self-hosting.md)):
+
+- **Removal** of a version or a whole bundle. The registry answers `410 Gone`
+  with the admin's reason to downloads, metadata and exact-version resolves;
+  `capm pull`, `inspect` and `run` refuse and print the reason. Removed
+  versions are never `latest`, their manifest is withheld, the data is deleted
+  from the server (unless a live version shares the same bytes), and the
+  version number can never be published again. The reason is written by an
+  admin but is still untrusted text to clients, so the CLI and website
+  sanitise it like any registry string.
+- **Bans** of a user. A banned user's tokens stop working, they cannot get a new
+  one, and their bundles disappear from listings and answer 404. A ban is per
+  GitHub account, not per person.
+
+What these do not do: removed data remains in backup snapshots until they age
+out (urgent purge: `restic forget --prune`), copies people already pulled are
+unaffected, and nothing stops a removed file being republished under a new
+version number or another account (a new publish is not blocked by content).
+Every admin action is recorded in an audit log (`capm admin log`). The admin
+API answers 404 to everyone who is not an admin.
+
 ## The public deployment
 
 The registry at `https://capm.masondrake.dev` is open to the internet, and
 anyone with a GitHub account can publish. That sharpens several of the points
 above. Operating procedures are in [self-hosting.md](self-hosting.md).
 
-- **Tokens cannot be revoked, and that matters more here.** A leaked token
-  stays valid forever, and there are no admin endpoints to remove a malicious
-  bundle or ban a publisher. The only remedy is the takedown runbook in
-  [self-hosting.md](self-hosting.md): stop the backend and edit the SQLite
-  database by hand (yank or delete a version, delete a user's tokens). Deleting
-  tokens does not keep the person out, since any GitHub account can log in
-  again. Treat every bundle from an unknown publisher as untrusted; yanking
-  does not stop pulls of an exact version.
+- **Tokens cannot be revoked by their owner, and that matters more here.** A
+  leaked token stays valid until an admin acts. Admins can remove versions and
+  ban users (next section), but banning does not keep the person out for good,
+  since any GitHub account can log in again. Treat every bundle from an unknown
+  publisher as untrusted; yanking does not stop pulls of an exact version.
 - **`CLIENT_IP_HEADER` is trusted blindly.** If set (for example to
   `CF-Connecting-IP`), the backend rate-limits on whatever IP that header
   holds, with no check on who sent it. It is safe only if every request

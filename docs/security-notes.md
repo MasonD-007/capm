@@ -265,6 +265,16 @@ version number or another account (a new publish is not blocked by content).
 Every admin action is recorded in an audit log (`capm admin log`). The admin
 API answers 404 to everyone who is not an admin.
 
+## Download counts are not a trust signal
+
+The registry counts each successful download request per version and UTC day,
+and shows totals on the website and in `capm list --sort downloads`. These are
+raw, unauthenticated request counts: anyone with `curl` can inflate them, and
+nothing is de-duplicated. They say nothing about whether a bundle is safe or
+good, are never used for search matching, and should not be read as a
+recommendation. No IP address, token or account is stored for them, only the
+owner, bundle, version, day and a number.
+
 ## Quotas are the disk-fill defence
 
 The registry's volume does not enforce its size, so anyone with a GitHub

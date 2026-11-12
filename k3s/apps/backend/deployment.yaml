@@ -28,7 +28,7 @@ spec:
       containers:
         - name: backend
           # Tag is rewritten to the released commit SHA by .github/workflows/deploy.yml.
-          image: ghcr.io/masond-007/capm/backend:9baeedc815a9c1ec62a7ddac5c122ec502262bfe
+          image: ghcr.io/masond-007/capm/backend:7b4940444e64d4faf4f9d7f9a91cd50e19f8800a
           ports:
             - containerPort: 8080
               name: http

@@ -50,6 +50,8 @@ type TokenInfo struct {
 }
 
 type Resolved struct {
+	// OwnerID is the owner's numeric account id; 0 when an older server omits it.
+	OwnerID int64  `json:"ownerId,omitempty"`
 	Version string `json:"version"`
 	Digest  string `json:"digest"`
 	Yanked  bool   `json:"yanked"`
@@ -61,6 +63,7 @@ type Resolved struct {
 // not decoded, because the caller recomputes it from the manifest rather than
 // trusting the registry's rendering.
 type Metadata struct {
+	OwnerID   int64             `json:"ownerId,omitempty"`
 	Version   string            `json:"version"`
 	Digest    string            `json:"digest"`
 	Yanked    bool              `json:"yanked"`

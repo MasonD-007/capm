@@ -57,14 +57,17 @@ Commands:
   tokens    List your login tokens; "tokens revoke <id>" revokes one
   push      Package and publish an agent to a registry
   pull      Download a bundle and check it against the registry's sha256 digest (bundles are not signed)
-  inspect   Show the bundle's declared permissions (not enforced; see the egress line)
+  inspect   Show the bundle's declared permissions (not enforced; see the egress line);
+            with --diff [oldversion], show what changed since the version you last ran
   run       Launch an agent in a Docker Sandbox (sbx)
   search    Find bundles whose owner, name or description contains the text
   list      List bundles in the registry, or only one owner's
+  known     List the bundles capm remembers (pinned owners); known forget <owner/name>
   version   Print the capm version
 
 capm run [--yes] [--workdir DIR] [--model-url URL] [--model-key KEY] [--model NAME]
-         [--allow-unenforced-egress] [--allow-global-anthropic-secret] <dir | user/name[@version]>
+         [--allow-unenforced-egress] [--allow-global-anthropic-secret] [--accept-new-owner]
+         [--accept-permission-changes] [--accept-changed-digest] <dir | user/name[@version]>
   Shows the declared permissions and run plan, asks to confirm (--yes skips),
   then runs the agent with sbx. Mount paths are relative to --workdir
   (default: the current directory). The model endpoint comes from --model-url
@@ -75,6 +78,18 @@ capm run [--yes] [--workdir DIR] [--model-url URL] [--model-key KEY] [--model NA
   is given. It also refuses when a global sbx "anthropic" secret is stored,
   since the sandbox can reach api.anthropic.com, unless
   --allow-global-anthropic-secret is given.
+  For a registry bundle, capm remembers the owner's account id the first time
+  and refuses if it later changes unless --accept-new-owner is given.
+  It also remembers the permissions of the last registry version you ran and,
+  before asking to confirm a different version, shows what changed (+ added,
+  - removed, ~ changed). When something is added or widened, --yes alone does
+  not skip the confirmation: non-interactive runs need --accept-permission-changes.
+  The same version served with different bytes is refused unless
+  --accept-changed-digest is given.
+
+capm pull [--accept-new-owner] user/name[@version]
+  Downloads the bundle into ./name/ after checking its digest, and remembers
+  the owner's account id the same way. --accept-new-owner accepts a changed owner.
 `
 
 // run executes the CLI with args (excluding the program name) and returns the exit code.
@@ -110,6 +125,8 @@ func runEnv(args []string, stdout, stderr io.Writer, e env) int {
 		return search(args[1:], stdout, stderr, e)
 	case "list":
 		return list(args[1:], stdout, stderr, e)
+	case "known":
+		return knownCmd(args[1:], stdout, stderr, e)
 	case "version":
 		fmt.Fprintf(stdout, "capm %s\n", version)
 		return 0

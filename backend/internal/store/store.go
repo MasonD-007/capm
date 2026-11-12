@@ -35,6 +35,8 @@ type Bundle struct {
 }
 
 type Version struct {
+	// OwnerID is the owner's GitHub numeric id.
+	OwnerID int64
 	Version string
 	Digest  string // "sha256:<hex>"
 	Yanked  bool
@@ -175,7 +177,7 @@ func (s *Store) Publish(ownerID int64, ownerLogin, name, version string, tarball
 }
 
 func (s *Store) Versions(ownerLogin, name string) ([]Version, error) {
-	rows, err := s.db.Query(`SELECT v.version, v.digest, v.yanked, v.manifest, v.created_at, v.removed, v.removed_reason
+	rows, err := s.db.Query(`SELECT v.owner_id, v.version, v.digest, v.yanked, v.manifest, v.created_at, v.removed, v.removed_reason
 		FROM versions v JOIN users u ON u.id = v.owner_id
 		WHERE u.login = ? AND v.name = ?`+notBanned+` ORDER BY v.created_at, v.rowid`, ownerLogin, name)
 	if err != nil {
@@ -191,7 +193,7 @@ func (s *Store) Versions(ownerLogin, name string) ([]Version, error) {
 			created int64
 			removed int
 		)
-		if err := rows.Scan(&v.Version, &v.Digest, &yanked, &mj, &created, &removed, &v.RemovedReason); err != nil {
+		if err := rows.Scan(&v.OwnerID, &v.Version, &v.Digest, &yanked, &mj, &created, &removed, &v.RemovedReason); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal([]byte(mj), &v.Manifest); err != nil {

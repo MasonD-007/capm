@@ -66,10 +66,42 @@ identity is the GitHub login in the bundle name (`login/name`).
 The registry keys owners by GitHub numeric ID, but bundle names use the
 login. If a GitHub user renames or deletes their account, someone else can
 register that login on GitHub and then publish under the same `login/name`
-(new versions; existing versions are immutable). The CLI pins nothing: it
-does not remember who published a bundle you ran before. Pin exact versions
-(`login/name@1.2.3`) and review `capm inspect` every time, especially after
-a new version appears.
+(new versions; existing versions are immutable).
+
+The CLI now pins owners. The registry reports the owner's numeric ID with
+every resolve and metadata response. The first time you run or pull
+`login/name` from a registry, capm records that ID in `known.json` (see
+getting-started). On a later `run` or `pull`, a different ID makes capm refuse,
+showing the pinned and the new ID and saying the name may have been taken over
+by a different GitHub account. `--accept-new-owner` proceeds and re-pins.
+`capm inspect` shows the pin status and never writes it.
+
+Limits: pinning protects only a user who ran or pulled the bundle before, on
+that machine; it does nothing on the first use, so the registry is still
+trusted for the first run (and for the ID it reports: a malicious registry can
+lie). A registry that does not send an owner ID is not pinned, and capm warns
+about it. Deleting `known.json` or running `capm known forget` removes the
+pin. Local-directory runs are never pinned. Still pin exact versions
+(`login/name@1.2.3`) and review `capm inspect`.
+
+## Permission diff on upgrade
+
+`capm run` also records the version, digest and manifest of the last registry
+version you confirmed. Running a different version shows what changed in egress
+hosts, mounts (path and mode), secrets, MCP servers (name, URL, secret), base
+agent and context files before the normal confirmation. Anything added, a mount
+going from read-only to read-write, a re-pointed MCP server or a different base
+agent counts as an escalation: `--yes` alone then does not skip the prompt, and
+non-interactive use needs `--accept-permission-changes`. Removed-only changes
+are informational, and downgrades are diffed the same way. If the registry
+serves different bytes for a version you already ran (versions are meant to be
+immutable), the run is refused unless `--accept-changed-digest` is given.
+`capm inspect owner/name@v --diff [oldversion]` prints the diff without running.
+
+Limits: the diff compares declared manifests only, so it says nothing about
+changes to the contents of context files or other bundle files, and the
+baseline is whatever you last confirmed on this machine; the first run of a
+bundle has nothing to compare with.
 
 ## Tokens
 

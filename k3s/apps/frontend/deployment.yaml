@@ -19,7 +19,7 @@ spec:
       containers:
         - name: frontend
           # Tag is rewritten to the released commit SHA by .github/workflows/deploy.yml.
-          image: ghcr.io/masond-007/capm/frontend:93fcdc4095091d0d19ab7edc2bc5e7f34bc1afca
+          image: ghcr.io/masond-007/capm/frontend:2677ead7e4a4e763ad36d2c58792e7e51196d0fa
           ports:
             - containerPort: 3000
               name: http

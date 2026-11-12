@@ -60,8 +60,8 @@ func TestMigrateV3BackfillsSizesFromBlobs(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	if v := schemaVersion(t, s.db); v != 6 || len(migrations) != 6 {
-		t.Fatalf("schema_version = %d, len(migrations) = %d, want 6", v, len(migrations))
+	if v := schemaVersion(t, s.db); v != 7 || len(migrations) != 7 {
+		t.Fatalf("schema_version = %d, len(migrations) = %d, want 7", v, len(migrations))
 	}
 	want := [][]any{
 		{"x", "1.0.0", int64(10)},

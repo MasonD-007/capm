@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Suspense } from "react";
 import { ApiError, listBundles } from "@/lib/api";
+import { riskDisplay } from "@/lib/risk";
 import { clean } from "@/lib/text";
 
 export default function Home() {
@@ -37,7 +38,9 @@ async function BundleList() {
   }
   return (
     <ul className="mt-8 divide-y divide-zinc-200 dark:divide-zinc-800">
-      {bundles.map((b) => (
+      {bundles.map((b) => {
+        const risk = riskDisplay(b.risk);
+        return (
         <li key={`${b.owner}/${b.name}`} className="py-4">
           <Link
             href={`/bundles/${encodeURIComponent(b.owner)}/${encodeURIComponent(b.name)}`}
@@ -48,11 +51,20 @@ async function BundleList() {
           <span className="ml-3 text-sm text-zinc-500">
             {b.latest ? `latest ${clean(b.latest)}` : "no installable version (all yanked)"}
           </span>
+          {risk && (
+            <span
+              className={`ml-3 align-middle ${risk.className}`}
+              title="Highest risk label, computed by the registry from the declared manifest; not a review. Open the bundle for the full list."
+            >
+              risk: {risk.word}
+            </span>
+          )}
           {b.description && (
             <p className="mt-1 text-zinc-700 dark:text-zinc-300">{clean(b.description)}</p>
           )}
         </li>
-      ))}
+        );
+      })}
     </ul>
   );
 }

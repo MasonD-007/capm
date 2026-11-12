@@ -67,6 +67,7 @@ type fakeRegistry struct {
 	forceVersion        string // override the version resolve reports
 	metaManifest        any    // override the manifest the metadata endpoint reports
 	metaSummary         any    // override the (untrusted) summary the metadata endpoint reports
+	metaRiskLabels      any    // if set, the (untrusted) riskLabels the metadata endpoint reports
 	metaVersion         string // override the version the metadata endpoint reports
 	downloads           int    // number of /download calls
 	ownerID             int64  // owner id sent by resolve and metadata; 0 = omitted (an older server)
@@ -194,6 +195,9 @@ func newFakeRegistry(t *testing.T) *fakeRegistry {
 		}
 		if f.metaSummary != nil {
 			out["summary"] = f.metaSummary
+		}
+		if f.metaRiskLabels != nil {
+			out["riskLabels"] = f.metaRiskLabels
 		}
 		if f.metaVersion != "" {
 			out["version"] = f.metaVersion

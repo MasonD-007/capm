@@ -1,9 +1,10 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
-import { ApiError, getBundle, isRemoved, latestNonYanked, noticeTexts } from "@/lib/api";
-import type { BundleVersion } from "@/lib/api";
+import { ApiError, getBundle, getRiskLabels, isRemoved, latestNonYanked, noticeTexts } from "@/lib/api";
+import type { BundleVersion, RiskLabel } from "@/lib/api";
 import { cliCommands } from "@/lib/commands";
+import { riskDisplay, sortRiskLabels } from "@/lib/risk";
 import { clean } from "@/lib/text";
 
 type Props = {
@@ -52,6 +53,7 @@ async function Detail({ params, searchParams }: Props) {
   const description = clean(selected.manifest?.metadata?.description);
   // A removed version has no manifest to show, and must never be offered for
   // install: skip the command block, description and permissions for it.
+  const riskLabels = removed ? null : await getRiskLabels(owner, name, selected.version);
   const cmd = removed ? null : cliCommands(owner, name, selected.version);
   return (
     <>
@@ -129,6 +131,8 @@ async function Detail({ params, searchParams }: Props) {
           <p className="mt-2 whitespace-pre-wrap text-zinc-700 dark:text-zinc-300">{description}</p>
         </section>
       )}
+
+      {riskLabels && <RiskLabels labels={riskLabels} />}
 
       {!removed && <Permissions s={selected.summary} />}
     </>
@@ -231,6 +235,41 @@ function Permissions({ s }: { s: BundleVersion["summary"] }) {
       <p className="mt-2 font-medium">
         Model endpoint: supplied by you (not part of the egress list)
       </p>
+    </section>
+  );
+}
+
+// Labels are computed by the registry from the declared manifest
+// (manifest/risk.go); `capm inspect` recomputes them locally. They state
+// exposure, not a review, and an empty list is not an endorsement.
+function RiskLabels({ labels }: { labels: RiskLabel[] }) {
+  const sorted = sortRiskLabels(labels);
+  return (
+    <section className="mt-10" aria-labelledby="risk-labels-heading">
+      <h2 id="risk-labels-heading" className="text-xl font-semibold">
+        Risk labels
+      </h2>
+      <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+        Computed from the declared manifest; not a review. They describe how much the bundle says it
+        can reach, and what is declared is not enforced yet. <code className="font-mono">capm inspect</code>{" "}
+        recomputes them locally.
+      </p>
+      {sorted.length === 0 ? (
+        <p className="mt-3 text-zinc-500">(no risk labels apply; this is not an endorsement)</p>
+      ) : (
+        <ul className="mt-3 space-y-2">
+          {sorted.map((l, i) => {
+            const d = riskDisplay(l.severity)!;
+            return (
+              <li key={`${l.id}-${i}`} className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                <span className={d.className}>{d.word}</span>
+                <span className="font-mono text-sm text-zinc-500">{clean(l.id)}</span>
+                <span className="break-words">{clean(l.reason)}</span>
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </section>
   );
 }

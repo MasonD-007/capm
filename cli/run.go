@@ -91,6 +91,13 @@ capm run [--yes] [--workdir DIR] [--model-url URL] [--model-key KEY] [--model NA
 capm pull [--accept-new-owner] user/name[@version]
   Downloads the bundle into ./name/ after checking its digest, and remembers
   the owner's account id the same way. --accept-new-owner accepts a changed owner.
+
+capm list / capm search
+  A "!!" or "!" before the description is the registry's claim about the
+  bundle's highest risk label (!! high, ! caution); blank means none flagged,
+  an info-only label, or a registry that does not report it, and is not an
+  endorsement. capm inspect and capm run compute the risk labels locally from
+  the manifest and do not use the registry's claim.
 `
 
 // run executes the CLI with args (excluding the program name) and returns the exit code.

@@ -103,6 +103,49 @@ changes to the contents of context files or other bundle files, and the
 baseline is whatever you last confirmed on this machine; the first run of a
 bundle has nothing to compare with.
 
+## What the risk labels mean
+
+Risk labels say how much a bundle declares it can touch. They are computed
+deterministically from the manifest (`manifest/risk.go`), so the CLI, the
+registry and the website agree. `capm inspect` and `capm run` recompute them
+locally from the manifest they validated and never use the registry's copy;
+the website and the `!!` / `!` marker in `capm list` and `capm search` show
+the registry's claim.
+
+- **Labels are derived from what the bundle declares.** They are not a review
+  of the bundle, its prompts or its code, and say nothing about intent.
+- **Declared is not enforced in v1** (see the first section). A label about
+  egress or mounts describes the declaration, not a guarantee.
+- **The absence of labels is not an endorsement.** A bundle with no labels
+  still runs an agent with a model, a sandbox and whatever it declares. Where
+  no label applies, capm says "no risk labels apply; this is not an
+  endorsement" (CLI and website) and the list marker is blank, which also
+  covers an info-only bundle and a registry that does not report risk.
+
+Counts use distinct egress hosts. Validation already rejects wildcard hosts
+and absolute or `..` mount paths, so there are no rules for them; a mount of
+`.` (or anything that cleans to it, such as `./` or `a/..`) is the workspace
+root. A secret named by an MCP server goes only to that server; every other
+declared secret is offered to every host in the egress list.
+
+| ID | Severity | Fires when | Reason form |
+| --- | --- | --- | --- |
+| `egress_many_hosts` | high | more than 10 distinct egress hosts | `Declares N egress hosts (more than 10)` |
+| `mount_read_write` | high | any mount has mode `read-write` | `Mounts read-write (N): paths` |
+| `mount_workspace_root` | high | any mount path cleans to `.` (either mode) | `Mounts the workspace root (N): path (mode), ...` |
+| `secret_many_hosts` | high | a declared secret that no MCP server names, and more than 3 distinct egress hosts | `Secrets offered to every egress host (N secrets, M hosts): names` |
+| `base_egress_broad` | caution | the base agent's kit allows a broad host list capm does not enumerate (OpenCode) | `Base agent opencode allows a broad host list that capm does not enumerate` |
+| `context_files` | caution | any context file | `Reads context files (N): paths` |
+| `mcp_servers` | caution | any MCP server | `Uses MCP servers (N): name (host), ...` |
+| `secrets_declared` | caution | any declared secret | `Declares secrets (N): names` |
+| `egress_none` | info | no egress host declared (the base agent's own hosts still apply) | `Declares egress hosts (0)` |
+| `mounts_read_only` | info | at least one mount and all are `read-only` | `Mounts are all read-only (N): paths` |
+
+Labels are listed high, then caution, then info, then by ID. The `risk` field
+the registry sends is the highest severity present. `capm list` and `capm
+search` show `!!` for high and `!` for caution; those columns are the
+registry's claim, so use `capm inspect` for the locally computed labels.
+
 ## Tokens
 
 Registry tokens issued by `capm login` expire after 90 days by default

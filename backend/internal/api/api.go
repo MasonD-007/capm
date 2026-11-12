@@ -139,16 +139,23 @@ func (a *API) list(w http.ResponseWriter, r *http.Request) {
 		// Description is that version's author-supplied description
 		// (unverified); empty when Latest is.
 		Description string `json:"description"`
+		// RiskLabels are computed from that version's manifest
+		// (manifest.RiskLabels); [] when Latest is empty. Risk is the highest
+		// severity, "" for none. Clients must recompute from the manifest.
+		RiskLabels []manifest.RiskLabel `json:"riskLabels"`
+		Risk       string               `json:"risk"`
 	}
 	// fill adds the latest installable version and its description.
 	fill := func(b store.Bundle) (item, error) {
-		it := item{Owner: b.Owner, OwnerLogin: b.OwnerLogin, Name: b.Name}
+		it := item{Owner: b.Owner, OwnerLogin: b.OwnerLogin, Name: b.Name, RiskLabels: []manifest.RiskLabel{}}
 		vs, err := a.store.Versions(b.OwnerLogin, b.Name)
 		if err != nil {
 			return it, err
 		}
 		if v := latestInstallable(vs); v != nil {
 			it.Latest, it.Description = v.Version, v.Manifest.Metadata.Description
+			it.RiskLabels = v.Manifest.RiskLabels()
+			it.Risk = manifest.HighestSeverity(it.RiskLabels)
 		}
 		return it, nil
 	}
@@ -275,7 +282,7 @@ func (a *API) metadata(w http.ResponseWriter, r *http.Request) {
 		writeGone(w, pick.RemovedReason)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"ownerId": pick.OwnerID, "version": pick.Version, "digest": pick.Digest, "yanked": pick.Yanked, "manifest": pick.Manifest, "summary": pick.Manifest.EnforcedSummary(), "createdAt": pick.CreatedAt})
+	writeJSON(w, 200, map[string]any{"ownerId": pick.OwnerID, "version": pick.Version, "digest": pick.Digest, "yanked": pick.Yanked, "manifest": pick.Manifest, "summary": pick.Manifest.EnforcedSummary(), "riskLabels": pick.Manifest.RiskLabels(), "createdAt": pick.CreatedAt})
 }
 
 func (a *API) download(w http.ResponseWriter, r *http.Request) {

@@ -78,12 +78,21 @@ func warnYanked(stderr io.Writer, owner, name string, r client.Resolved) {
 
 // pull downloads user/name[@version] into ./<name>/.
 func pull(args []string, stdout, stderr io.Writer, e env) int {
-	const use = "usage: capm pull user/name[@version]"
-	if len(args) != 1 {
+	const use = "usage: capm pull [--accept-new-owner] user/name[@version]"
+	acceptNewOwner := false
+	var pos []string
+	for _, a := range args {
+		if a == "--accept-new-owner" {
+			acceptNewOwner = true
+		} else {
+			pos = append(pos, a)
+		}
+	}
+	if len(pos) != 1 {
 		fmt.Fprintln(stderr, use)
 		return 2
 	}
-	owner, name, spec, err := parseRef(args[0])
+	owner, name, spec, err := parseRef(pos[0])
 	if err != nil {
 		fmt.Fprintf(stderr, "capm pull: %v\n%s\n", err, use)
 		return 2
@@ -103,6 +112,11 @@ func pull(args []string, stdout, stderr io.Writer, e env) int {
 		failFetch(stderr, "pull", err)
 		return 1
 	}
+	ks := newKnownStore(e, stderr)
+	pin, ok := ks.gateOwner("pull", stderr, e.registry, owner, name, res.OwnerID, acceptNewOwner)
+	if !ok {
+		return 1
+	}
 	// Unpack beside the destination, then rename, so a failure leaves nothing behind.
 	tmp, err := os.MkdirTemp(".", ".capm-pull-*")
 	if err != nil {
@@ -120,6 +134,11 @@ func pull(args []string, stdout, stderr io.Writer, e env) int {
 		return 1
 	}
 	os.Chmod(dest, 0o755)
+	if pin.state == pinNew || pin.state == pinChanged {
+		if err := ks.update(e.registry, owner, name, func(r *knownRecord) { setPin(r, pin) }); err != nil {
+			fmt.Fprintf(stderr, "warning: could not save %s: %v\n", knownFileName, err)
+		}
+	}
 	warnYanked(stderr, owner, name, res)
 	fmt.Fprintf(stdout, "Pulled %s/%s@%s into ./%s\n", owner, name, res.Version, dest)
 	return 0

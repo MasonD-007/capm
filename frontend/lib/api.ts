@@ -110,8 +110,21 @@ async function get<T>(path: string): Promise<T> {
   }
 }
 
-export function listBundles(): Promise<BundleListItem[]> {
-  return get<BundleListItem[]>("/v1/bundles");
+export type ListOptions = { q?: string; owner?: string; limit?: number; offset?: number };
+
+/** Path and query string for the list endpoint; empty options are left out. */
+function listPath(o: ListOptions): string {
+  const p = new URLSearchParams();
+  if (o.q) p.set("q", o.q);
+  if (o.owner) p.set("owner", o.owner);
+  if (o.limit) p.set("limit", String(o.limit));
+  if (o.offset) p.set("offset", String(o.offset));
+  const s = p.toString();
+  return s ? `/v1/bundles?${s}` : "/v1/bundles";
+}
+
+export function listBundles(o: ListOptions = {}): Promise<BundleListItem[]> {
+  return get<BundleListItem[]>(listPath(o));
 }
 
 const SEGMENT = /^[A-Za-z0-9._-]+$/;
@@ -130,22 +143,37 @@ export async function getBundle(owner: string, name: string): Promise<BundleVers
   );
 }
 
+/** Risk labels for one exact version; null when unavailable (see getVersionDetail). */
+export async function getRiskLabels(owner: string, name: string, version: string): Promise<RiskLabel[] | null> {
+  return (await getVersionDetail(owner, name, version))?.riskLabels ?? null;
+}
+
+export type VersionDetail = {
+  /** null when the registry predates labels; [] means none apply. */
+  riskLabels: RiskLabel[] | null;
+  /** The author's README text (unverified; empty when none). */
+  readme: string;
+};
+
 /**
- * Risk labels for one exact version, from the metadata endpoint (the versions
- * list does not carry them). null when the registry predates labels, the call
- * fails or the arguments are not plain path segments; [] means none apply.
+ * Per-version data from the metadata endpoint (the versions list carries
+ * neither risk labels nor README bodies). null when the call fails (a removed
+ * version answers 410) or the arguments are not plain path segments.
  */
-export async function getRiskLabels(
+export async function getVersionDetail(
   owner: string,
   name: string,
   version: string,
-): Promise<RiskLabel[] | null> {
+): Promise<VersionDetail | null> {
   if (!validSegment(owner) || !validSegment(name) || !validSegment(version)) return null;
   try {
-    const m = await get<{ riskLabels?: unknown }>(
+    const m = await get<{ riskLabels?: unknown; readme?: unknown }>(
       `/v1/bundles/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/${encodeURIComponent(version)}`,
     );
-    return Array.isArray(m?.riskLabels) ? (m.riskLabels as RiskLabel[]) : null;
+    return {
+      riskLabels: Array.isArray(m?.riskLabels) ? (m.riskLabels as RiskLabel[]) : null,
+      readme: typeof m?.readme === "string" ? m.readme : "",
+    };
   } catch {
     return null;
   }

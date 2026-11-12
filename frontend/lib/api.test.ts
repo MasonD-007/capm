@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, getBundle, isRemoved, listBundles, latestNonYanked } from "./api";
+import { ApiError, getBundle, getVersionDetail, isRemoved, listBundles, latestNonYanked } from "./api";
 
 function mockFetch(status: number, body: unknown) {
   const f = vi.fn(async () => new Response(JSON.stringify(body), { status }));
@@ -67,6 +67,47 @@ describe("getBundle", () => {
     mockFetch(502, {});
     const err = await getBundle("a", "b").catch((e) => e);
     expect(err.notFound).toBe(false);
+  });
+});
+
+describe("listBundles options", () => {
+  it("passes q, owner, limit and offset, encoded", async () => {
+    vi.stubEnv("API_URL", "http://backend:8080");
+    const f = mockFetch(200, []);
+    await listBundles({ q: "a b&c", owner: "alice", limit: 50, offset: 100 });
+    const [url, init] = f.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("http://backend:8080/v1/bundles?q=a+b%26c&owner=alice&limit=50&offset=100");
+    expect(init.cache).toBe("no-store");
+  });
+  it("omits empty options", async () => {
+    vi.stubEnv("API_URL", "http://backend:8080");
+    const f = mockFetch(200, []);
+    await listBundles({ q: "", limit: 50, offset: 0 });
+    expect((f.mock.calls[0] as unknown as [string])[0]).toBe("http://backend:8080/v1/bundles?limit=50");
+  });
+});
+
+describe("getVersionDetail", () => {
+  it("returns risk labels and readme from the metadata endpoint", async () => {
+    const f = mockFetch(200, { riskLabels: [{ id: "x", severity: "high", reason: "r" }], readme: "# hi" });
+    const d = await getVersionDetail("alice", "x", "1.0.0");
+    expect(d).toEqual({ riskLabels: [{ id: "x", severity: "high", reason: "r" }], readme: "# hi" });
+    expect((f.mock.calls[0] as unknown as [string])[0]).toContain("/v1/bundles/alice/x/1.0.0");
+  });
+  it("defaults readme to empty and tolerates an older server", async () => {
+    mockFetch(200, {});
+    expect(await getVersionDetail("alice", "x", "1.0.0")).toEqual({ riskLabels: null, readme: "" });
+  });
+  it("ignores a non-string readme", async () => {
+    mockFetch(200, { readme: { a: 1 }, riskLabels: [] });
+    expect(await getVersionDetail("alice", "x", "1.0.0")).toEqual({ riskLabels: [], readme: "" });
+  });
+  it("is null on failure or for non-segment arguments, without fetching", async () => {
+    const f = mockFetch(410, { removed: true });
+    expect(await getVersionDetail("alice", "x", "1.0.0")).toBeNull();
+    f.mockClear();
+    expect(await getVersionDetail("alice", "x", "../1")).toBeNull();
+    expect(f).not.toHaveBeenCalled();
   });
 });
 

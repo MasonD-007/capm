@@ -56,6 +56,8 @@ Commands:
   logout    Revoke this machine's token and delete the stored credentials
   tokens    List your login tokens; "tokens revoke <id>" revokes one
   usage     Show your storage use and the registry's limits
+  init      Create a commented capm.yaml (and a starter prompt) in a new bundle directory
+  lint      Check a bundle directory for problems before publishing; "--strict" makes warnings fail
   push      Package and publish an agent to a registry
   pull      Download a bundle and check it against the registry's sha256 digest (bundles are not signed)
   inspect   Show the bundle's declared permissions (not enforced; see the egress line);
@@ -115,6 +117,10 @@ func runEnv(args []string, stdout, stderr io.Writer, e env) int {
 		return admin(args[1:], stdout, stderr, e)
 	case "inspect":
 		return inspect(args[1:], stdout, stderr, e)
+	case "lint":
+		return lint(args[1:], stdout, stderr, e)
+	case "init":
+		return initCmd(args[1:], stdout, stderr, e)
 	case "login":
 		return login(args[1:], stdout, stderr, e)
 	case "whoami":

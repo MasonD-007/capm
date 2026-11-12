@@ -91,6 +91,13 @@ type BundleInfo struct {
 	// recomputes labels from the manifest. The server's riskLabels are
 	// deliberately not decoded.
 	Risk string `json:"risk"`
+	// Downloads30d is the registry's raw count of download requests over the
+	// last 30 days (anyone can inflate it; it is not a trust signal) and
+	// UpdatedAt the RFC 3339 time of the newest non-removed version. Both are
+	// absent (nil / "") from a registry that predates them, which is how the
+	// CLI tells that it ignored a `sort` request.
+	Downloads30d *int64 `json:"downloads30d,omitempty"`
+	UpdatedAt    string `json:"updatedAt,omitempty"`
 }
 
 // Sanitize makes a server-supplied string safe to print on a terminal: C0
@@ -433,7 +440,16 @@ func (c *Client) Versions(owner, name string) ([]VersionInfo, error) {
 
 // ListBundles returns one page of bundles; q and owner are optional filters.
 func (c *Client) ListBundles(q, owner string, limit, offset int) ([]BundleInfo, error) {
+	return c.ListBundlesSorted(q, owner, "", limit, offset)
+}
+
+// ListBundlesSorted is ListBundles with an optional sort ("recent" or
+// "downloads"); "" sends none. A registry that predates sorting ignores it.
+func (c *Client) ListBundlesSorted(q, owner, sort string, limit, offset int) ([]BundleInfo, error) {
 	v := url.Values{}
+	if sort != "" {
+		v.Set("sort", sort)
+	}
 	v.Set("limit", strconv.Itoa(limit))
 	v.Set("offset", strconv.Itoa(offset))
 	if q != "" {

@@ -105,6 +105,7 @@ capm tokens revoke 7               # revoke one, e.g. a lost laptop
 capm logout                        # revoke this machine's token and delete the stored credentials
 capm search reviewer               # bundles whose owner, name or description contains "reviewer"
 capm list alice                    # alice's bundles; without an owner, every bundle
+capm list --sort downloads         # most downloaded in the last 30 days first (also: recent, name; works on search too)
 capm inspect alice/pr-reviewer@0.1.0   # declared permissions, without installing
 capm pull alice/pr-reviewer@0.1.0  # unpacks into ./pr-reviewer after checking the sha256 digest
 capm run alice/pr-reviewer@0.1.0 --model-url https://models.example.com --allow-unenforced-egress
@@ -121,7 +122,13 @@ marker column appears before the description: `!!` means a high risk label and
 `!` a caution one. That marker is the registry's claim, and a blank is not an
 endorsement (it also appears for info-only bundles and registries that do not
 report risk); `capm inspect` shows the labels computed locally. Descriptions
-are written by the bundle's author and unverified. Output stops at 2000 bundles; narrow it with
+are written by the bundle's author and unverified. `--sort recent` orders by
+the newest version's date and `--sort downloads` by download requests over the
+last 30 days; each adds a column (`YYYY-MM-DD`, or the count) before the
+description, and the flag may come before or after the owner or search text.
+Download counts are raw request counts that anyone can inflate, not a trust
+signal. A registry that predates sorting is noted once on stderr and shown in
+its default order. Output stops at 2000 bundles; narrow it with
 `search`.
 
 `inspect` and `run` also take a local bundle directory. Omitting `@version`

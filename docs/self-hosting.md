@@ -337,7 +337,7 @@ directly. Follow [Maintenance pod](#maintenance-pod) (backend at 0 replicas,
 ArgoCD paused) up to the `kubectl exec` shell, then `sqlite3 /data/capm.db`.
 The `sqlite3` shell runs with foreign keys off, so do not delete `users` rows.
 
-Schema (schema version 5; see `backend/internal/store/migrate.go`):
+Schema (schema version 6, which also has a `downloads` table of per-day request counts; see `backend/internal/store/migrate.go`):
 
 | Table | Columns |
 |---|---|
@@ -471,8 +471,18 @@ kubectl -n capm logs -f job/backup-pre-migrate     # wait for it to finish
 kubectl -n capm delete job backup-pre-migrate      # afterwards
 ```
 
-**This release (schema version 5) migrates again, for README support (step
-5).** It adds one column, `versions.readme TEXT NOT NULL DEFAULT ''`; existing
+**This release (schema version 6) migrates again, for download counts (step
+6).** It adds one table, `downloads(owner_id, name, version, day, count)`
+(`day` is days since the Unix epoch, UTC) and an index on `day`; no existing
+table changes. Counts start at zero. At every start the backend also rolls
+daily rows older than 400 days into one row per version with `day = 0`, so
+all-time totals stay correct (idempotent, one transaction). Take the backup
+above first. A release older than 6 refuses to start on a version-6 database,
+so a rollback needs the pre-migration snapshot or a roll-forward fix; a
+rolled-back-and-forward registry keeps its counts, it just does not count
+while the old release runs.
+
+**Schema version 5 migrated for README support (step 5).** It adds one column, `versions.readme TEXT NOT NULL DEFAULT ''`; existing
 versions keep an empty README (no backfill from blobs). Take the backup above
 first. A release older than 5 refuses to start on a version-5 database ("newer
 than this server supports"), so a rollback needs the pre-migration snapshot or

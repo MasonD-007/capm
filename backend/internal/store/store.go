@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -86,7 +87,13 @@ func Open(dataDir string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("store: backfill sizes: %w", err)
 	}
-	return &Store{db: db, blobsDir: blobs, now: time.Now, limits: DefaultLimits()}, nil
+	s := &Store{db: db, blobsDir: blobs, now: time.Now, limits: DefaultLimits()}
+	// Retention is housekeeping: a failure is logged and retried next start,
+	// it never keeps the registry down.
+	if err := s.rollupDownloads(); err != nil {
+		log.Printf("store: download rollup failed (will retry at next start): %v", err)
+	}
+	return s, nil
 }
 
 func (s *Store) Close() error { return s.db.Close() }
@@ -181,7 +188,7 @@ func (s *Store) Publish(ownerID int64, ownerLogin, name, version string, tarball
 		return err
 	}
 	if _, err := tx.Exec(`INSERT INTO versions(owner_id, name, version, digest, manifest, created_at, size, readme)
-		VALUES(?, ?, ?, ?, ?, ?, ?, ?)`, ownerID, name, version, "sha256:"+hexsum, string(mj), time.Now().Unix(), len(tarball), readme); err != nil {
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?)`, ownerID, name, version, "sha256:"+hexsum, string(mj), s.now().Unix(), len(tarball), readme); err != nil {
 		if isUnique(err) {
 			return ErrVersionExists
 		}

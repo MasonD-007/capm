@@ -4,7 +4,7 @@ import { Suspense } from "react";
 import { ApiError, getBundle, getVersionDetail, isRemoved, latestNonYanked, noticeTexts } from "@/lib/api";
 import type { BundleVersion, RiskLabel } from "@/lib/api";
 import { cliCommands } from "@/lib/commands";
-import { formatDate, shortDigest, versionState } from "@/lib/format";
+import { downloadTotals, formatDate, formatDownloads, shortDigest, versionState } from "@/lib/format";
 import { Readme } from "@/lib/readme";
 import { riskDisplay, sortRiskLabels } from "@/lib/risk";
 import { clean } from "@/lib/text";
@@ -70,6 +70,8 @@ async function Detail({ params, searchParams }: Props) {
         </Link>
         /{clean(name)}
       </h1>
+
+      <DownloadTotals versions={versions} />
 
       {removed && (
         <section role="alert" className="mt-6 rounded border border-red-400 p-4 text-red-800 dark:text-red-300">
@@ -153,6 +155,25 @@ async function Detail({ params, searchParams }: Props) {
   );
 }
 
+// Totals across the bundle's versions that have not been removed. Nothing is
+// shown for a registry that does not send counts.
+function DownloadTotals({ versions }: { versions: BundleVersion[] }) {
+  const t = downloadTotals(versions);
+  if (!t) return null;
+  return (
+    <section className="mt-4" aria-labelledby="downloads-heading">
+      <h2 id="downloads-heading" className="sr-only">
+        Downloads
+      </h2>
+      <p className="text-sm text-zinc-700 dark:text-zinc-300">
+        <span className="font-medium">{formatDownloads(t.last30d)}</span> in the last 30 days,{" "}
+        <span className="font-medium">{formatDownloads(t.total)}</span> all time.
+      </p>
+      <p className="mt-1 text-xs text-zinc-500">Download counts are raw request counts.</p>
+    </section>
+  );
+}
+
 function VersionNotFound({ owner, name, wanted }: { owner: string; name: string; wanted: string }) {
   return (
     <section role="alert" className="mt-8 rounded border border-amber-400 p-4">
@@ -215,6 +236,7 @@ function History({
               <th scope="col" className="px-3 py-2 font-medium">Version</th>
               <th scope="col" className="px-3 py-2 font-medium">Published</th>
               <th scope="col" className="px-3 py-2 font-medium">State</th>
+              <th scope="col" className="px-3 py-2 font-medium">Downloads</th>
               <th scope="col" className="px-3 py-2 font-medium">Digest</th>
             </tr>
           </thead>
@@ -236,6 +258,9 @@ function History({
                   <td className="px-3 py-2 whitespace-nowrap">{formatDate(v.createdAt)}</td>
                   <td className="px-3 py-2">
                     <span className={STATE_CLASS[st.kind]}>{st.label}</span>
+                  </td>
+                  <td className="px-3 py-2 whitespace-nowrap tabular-nums">
+                    {v.removed === true ? "-" : (v.downloads?.toLocaleString("en-US") ?? "")}
                   </td>
                   <td className="px-3 py-2 font-mono text-xs whitespace-nowrap">{shortDigest(v.digest)}</td>
                 </tr>

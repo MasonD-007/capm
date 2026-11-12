@@ -69,6 +69,7 @@ type fakeRegistry struct {
 	metaSummary         any    // override the (untrusted) summary the metadata endpoint reports
 	metaVersion         string // override the version the metadata endpoint reports
 	downloads           int    // number of /download calls
+	ownerID             int64  // owner id sent by resolve and metadata; 0 = omitted (an older server)
 
 	polls int // number of /auth/token calls
 }
@@ -162,6 +163,9 @@ func newFakeRegistry(t *testing.T) *fakeRegistry {
 		if f.forceVersion != "" {
 			out["version"] = f.forceVersion
 		}
+		if f.ownerID != 0 {
+			out["ownerId"] = f.ownerID
+		}
 		json.NewEncoder(w).Encode(out)
 	})
 	mux.HandleFunc("GET /v1/bundles/{owner}/{name}/{version}", func(w http.ResponseWriter, r *http.Request) {
@@ -182,6 +186,9 @@ func newFakeRegistry(t *testing.T) *fakeRegistry {
 		sum := sha256.Sum256(fv.tar)
 		out := map[string]any{"version": r.PathValue("version"), "digest": "sha256:" + hex.EncodeToString(sum[:]),
 			"yanked": fv.yanked, "manifest": m, "summary": m.EnforcedSummary(), "createdAt": time.Now()}
+		if f.ownerID != 0 {
+			out["ownerId"] = f.ownerID
+		}
 		if f.metaManifest != nil {
 			out["manifest"] = f.metaManifest
 		}

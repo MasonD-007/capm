@@ -23,7 +23,7 @@ import (
 	"github.com/MasonD-007/capm/manifest"
 )
 
-const runUse = "usage: capm run [--yes] [--workdir DIR] [--model-url URL] [--model-key KEY] [--model NAME] [--allow-unenforced-egress] [--allow-global-anthropic-secret] <dir | user/name[@version]>"
+const runUse = "usage: capm run [--yes] [--workdir DIR] [--model-url URL] [--model-key KEY] [--model NAME] [--allow-unenforced-egress] [--allow-global-anthropic-secret] [--accept-new-owner] [--accept-permission-changes] [--accept-changed-digest] <dir | user/name[@version]>"
 
 // runDefaults fills in the interactive pieces of e that tests may inject.
 func (e env) runDefaults(stdout, stderr io.Writer) env {
@@ -56,6 +56,9 @@ func (e env) runDefaults(stdout, stderr io.Writer) env {
 type runFlags struct {
 	yes, allowUnenforced        bool
 	allowGlobalAnthropic        bool
+	acceptNewOwner              bool
+	acceptPermChanges           bool
+	acceptChangedDigest         bool
 	workdir, modelURL, modelKey string
 	modelName                   string
 	target                      string
@@ -70,6 +73,9 @@ func parseRunFlags(args []string, stderr io.Writer) (runFlags, error) {
 	fs.BoolVar(&f.yes, "y", false, "")
 	fs.BoolVar(&f.allowUnenforced, "allow-unenforced-egress", false, "")
 	fs.BoolVar(&f.allowGlobalAnthropic, "allow-global-anthropic-secret", false, "")
+	fs.BoolVar(&f.acceptNewOwner, "accept-new-owner", false, "")
+	fs.BoolVar(&f.acceptPermChanges, "accept-permission-changes", false, "")
+	fs.BoolVar(&f.acceptChangedDigest, "accept-changed-digest", false, "")
 	fs.StringVar(&f.workdir, "workdir", "", "")
 	fs.StringVar(&f.modelURL, "model-url", "", "")
 	fs.StringVar(&f.modelKey, "model-key", "", "")
@@ -125,6 +131,14 @@ func runCmd(args []string, stdout, stderr io.Writer, e env) int {
 	// Locate the bundle: an existing path is local, otherwise a reference.
 	var m *manifest.Manifest
 	bundleDir := f.target
+	// Set only for registry bundles; local directories are never remembered.
+	var (
+		ks                *knownStore
+		regOwner, regName string
+		res               client.Resolved
+		pin               pinInfo
+		since             sinceLastRun
+	)
 	if _, serr := os.Stat(f.target); serr != nil {
 		owner, name, spec, perr := parseRef(f.target)
 		if perr != nil {
@@ -134,7 +148,6 @@ func runCmd(args []string, stdout, stderr io.Writer, e env) int {
 			}
 			return fail("%v", serr)
 		}
-		var res client.Resolved
 		m, bundleDir, res, err = fetchToTemp(e, owner, name, spec, e.tempRoot, "capm-run-bundle-*")
 		if bundleDir != "" {
 			defer os.RemoveAll(bundleDir)
@@ -146,6 +159,15 @@ func runCmd(args []string, stdout, stderr io.Writer, e env) int {
 				return 1
 			}
 			return fail("%v", err)
+		}
+		ks, regOwner, regName = newKnownStore(e, stderr), owner, name
+		var okPin bool
+		if pin, okPin = ks.gateOwner("run", stderr, e.registry, owner, name, res.OwnerID, f.acceptNewOwner); !okPin {
+			return 1
+		}
+		var okLast bool
+		if since, okLast = ks.compareLastRun(stderr, e.registry, owner, name, res, m, f.acceptChangedDigest); !okLast {
+			return 1
 		}
 		fmt.Fprintf(stderr, "running registry %s/%s@%s\n", owner, name, res.Version)
 		warnYanked(stderr, owner, name, res)
@@ -197,13 +219,22 @@ func runCmd(args []string, stdout, stderr io.Writer, e env) int {
 	}
 	fmt.Fprint(stdout, m.EnforcedSummary().Render())
 	fmt.Fprint(stdout, renderRunInfo(m, info))
+	fmt.Fprint(stdout, since.render())
 
 	if !info.Enforced && !f.allowUnenforced {
 		return fail("refusing to start: egress to exactly the listed hosts cannot be enforced; pass --allow-unenforced-egress to run anyway")
 	}
-	if !f.yes {
+	// Added or widened permissions are never approved by --yes alone.
+	escalated := since.escalates() && !f.acceptPermChanges
+	if !f.yes || escalated {
 		if !e.isTTY() {
+			if escalated {
+				return fail("%s", escalationRefusal(since, f.yes))
+			}
 			return fail("stdin is not a terminal; pass --yes to run without confirmation")
+		}
+		if f.yes {
+			fmt.Fprintln(stdout, "\nPermissions were added or widened since the version you last ran, so --yes does not skip this prompt.")
 		}
 		fmt.Fprint(stdout, "\nProceed? [y/N] ")
 		line, _ := bufio.NewReader(e.stdin).ReadString('\n')
@@ -213,6 +244,11 @@ func runCmd(args []string, stdout, stderr io.Writer, e env) int {
 	}
 	if ctx.Err() != nil {
 		return fail("interrupted; nothing was run")
+	}
+
+	if ks != nil {
+		// The user has confirmed (or flags authorised) this run: remember it.
+		ks.recordRun(stderr, e.registry, regOwner, regName, pin, res, m)
 	}
 
 	opts.Secrets = map[string]string{}

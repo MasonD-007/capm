@@ -275,7 +275,7 @@ func (a *API) metadata(w http.ResponseWriter, r *http.Request) {
 		writeGone(w, pick.RemovedReason)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"version": pick.Version, "digest": pick.Digest, "yanked": pick.Yanked, "manifest": pick.Manifest, "summary": pick.Manifest.EnforcedSummary(), "createdAt": pick.CreatedAt})
+	writeJSON(w, 200, map[string]any{"ownerId": pick.OwnerID, "version": pick.Version, "digest": pick.Digest, "yanked": pick.Yanked, "manifest": pick.Manifest, "summary": pick.Manifest.EnforcedSummary(), "createdAt": pick.CreatedAt})
 }
 
 func (a *API) download(w http.ResponseWriter, r *http.Request) {
@@ -417,7 +417,7 @@ func (a *API) resolve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	out := map[string]any{"version": pick.Version, "digest": pick.Digest, "yanked": pick.Yanked}
+	out := map[string]any{"ownerId": pick.OwnerID, "version": pick.Version, "digest": pick.Digest, "yanked": pick.Yanked}
 	if pick.Yanked {
 		out["warning"] = "yanked"
 	}

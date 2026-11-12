@@ -96,6 +96,7 @@ make install && make frontend   # Next.js dev server on :3000, reading API_URL (
 export CAPM_REGISTRY=http://localhost:8080   # needed for local development; the default is https://capm.masondrake.dev
 
 capm login                         # GitHub device flow; prints a URL and a code
+capm whoami                        # your login on stdout; asks the registry whether the stored token still works
 capm push ./my-bundle              # publishes <your-login>/<metadata.name>@<metadata.version>
 capm tokens                        # your login tokens (id, name, last used, expiry); * marks this machine
 capm tokens revoke 7               # revoke one, e.g. a lost laptop
@@ -105,6 +106,9 @@ capm list alice                    # alice's bundles; without an owner, every bu
 capm inspect alice/pr-reviewer@0.1.0   # declared permissions, without installing
 capm pull alice/pr-reviewer@0.1.0  # unpacks into ./pr-reviewer after checking the sha256 digest
 capm run alice/pr-reviewer@0.1.0 --model-url https://models.example.com --allow-unenforced-egress
+capm inspect alice/pr-reviewer@0.2.0 --diff   # what changed since the version you last ran
+capm known                         # bundles capm remembers (pinned owners, last run)
+capm known forget alice/pr-reviewer
 capm version                       # which build you are running
 ```
 
@@ -125,6 +129,31 @@ listed hosts (see the security notes). It also refuses while a global sbx
 `anthropic` secret is stored, unless you pass `--allow-global-anthropic-secret`.
 Mount paths in the manifest are resolved under `--workdir` (default: the
 current directory).
+
+### What capm remembers
+
+For every registry bundle you pull or run, capm keeps a record in
+`known.json` in the capm config directory (next to `credentials.json`; for
+example `~/.config/capm/known.json` on Linux and
+`~/Library/Application Support/capm/known.json` on macOS; mode 0600). It holds
+the bundle owner's GitHub account id, and for runs the version, digest and
+manifest of the last run you confirmed. Nothing is written when you only
+`inspect`, when you decline the confirmation, or for local directories.
+
+- **Owner pinning.** If the registry later reports a different owner id for the
+  same `owner/name`, `run` and `pull` refuse; `--accept-new-owner` proceeds and
+  pins the new id. Registries that do not send an owner id get a warning, not a
+  pin.
+- **Permission diff.** Running a different version than last time first shows
+  `Changes since the version you last ran (X -> Y)` with `+` added, `-` removed
+  and `~` changed lines (egress, mounts, secrets, MCP servers, base agent,
+  context files). If anything was added or widened, `--yes` does not skip the
+  confirmation; use a terminal, or pass `--accept-permission-changes` to run
+  non-interactively. If the same version is served with a different digest, the
+  run is refused unless you pass `--accept-changed-digest`.
+- `capm known forget owner/name` deletes a record; deleting the file forgets
+  everything. A corrupt file is ignored with a warning and replaced on the next
+  recorded run.
 
 ### Environment variables the CLI reads
 

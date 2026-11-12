@@ -13,19 +13,26 @@ import (
 
 // inspect prints the declared-permission summary for the bundle in args[0].
 func inspect(args []string, stdout, stderr io.Writer, e env) int {
-	if len(args) != 1 {
-		fmt.Fprintf(stderr, "usage: capm inspect <dir | user/name[@version]>\n(an existing local path wins over a registry reference; use ./user/name to force local)\n")
+	const use = "usage: capm inspect <dir | user/name[@version]> [--diff [oldversion]]\n(an existing local path wins over a registry reference; use ./user/name to force local)"
+	target, diff, oldVersion, ok := parseInspectArgs(args)
+	if !ok {
+		fmt.Fprintln(stderr, use)
 		return 2
 	}
+	args = []string{target}
 	// An existing path is a local bundle; otherwise a well-formed reference is
 	// fetched from the registry. Anything containing "@" is meant as a reference.
 	if _, err := os.Stat(args[0]); err != nil {
 		if o, n, v, perr := parseRef(args[0]); perr == nil {
-			return inspectRemote(o, n, v, stdout, stderr, e)
+			return inspectRemote(o, n, v, diff, oldVersion, stdout, stderr, e)
 		} else if strings.Contains(args[0], "@") {
-			fmt.Fprintf(stderr, "capm inspect: %v\nusage: capm inspect <dir | user/name[@version]>\n(an existing local path wins over a registry reference; use ./user/name to force local)\n", perr)
+			fmt.Fprintf(stderr, "capm inspect: %v\n%s\n", perr, use)
 			return 2
 		}
+	}
+	if diff {
+		fmt.Fprintf(stderr, "capm inspect: --diff needs a registry reference (user/name[@version])\n%s\n", use)
+		return 2
 	}
 	fmt.Fprintf(stderr, "inspecting local %s\n", client.Sanitize(args[0]))
 	data, err := os.ReadFile(filepath.Join(args[0], manifest.FileName))
@@ -49,7 +56,7 @@ func inspect(args []string, stdout, stderr io.Writer, e env) int {
 // registry's metadata endpoint, without downloading the bundle. The registry
 // is untrusted, so the manifest is validated here and the summary is computed
 // from it locally; the server's own `summary` field is never used.
-func inspectRemote(owner, name, spec string, stdout, stderr io.Writer, e env) int {
+func inspectRemote(owner, name, spec string, diff bool, oldVersion string, stdout, stderr io.Writer, e env) int {
 	c := client.New(e.registry, "")
 	res, err := resolveChecked(c, owner, name, spec)
 	if err != nil {
@@ -74,6 +81,13 @@ func inspectRemote(owner, name, spec string, stdout, stderr io.Writer, e env) in
 	fmt.Fprintf(stderr, "inspecting registry %s/%s@%s\n", owner, name, res.Version)
 	fmt.Fprintln(stderr, "note: metadata only; the bundle was not downloaded, so its digest was not checked")
 	warnYanked(stderr, owner, name, res)
+	// Read-only: inspect shows the pin status but never records anything.
+	ks := newKnownStore(e, stderr)
+	rec, recorded := ks.get(e.registry, owner, name)
+	fmt.Fprintln(stderr, describePin(pinStatus(rec, recorded, res.OwnerID), rec, recorded))
+	if diff {
+		return inspectDiff(c, ks, e, owner, name, res, md, oldVersion, stdout, stderr)
+	}
 	fmt.Fprint(stdout, m.EnforcedSummary().Render())
 	return 0
 }

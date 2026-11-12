@@ -96,6 +96,7 @@ make install && make frontend   # Next.js dev server on :3000, reading API_URL (
 export CAPM_REGISTRY=http://localhost:8080   # needed for local development; the default is https://capm.masondrake.dev
 
 capm login                         # GitHub device flow; prints a URL and a code
+capm whoami                        # your login on stdout; asks the registry whether the stored token still works
 capm push ./my-bundle              # publishes <your-login>/<metadata.name>@<metadata.version>
 capm tokens                        # your login tokens (id, name, last used, expiry); * marks this machine
 capm tokens revoke 7               # revoke one, e.g. a lost laptop

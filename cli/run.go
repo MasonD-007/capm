@@ -52,6 +52,7 @@ Usage:
 
 Commands:
   login     Authenticate with a registry
+  whoami    Print the login you are authenticated as
   logout    Revoke this machine's token and delete the stored credentials
   tokens    List your login tokens; "tokens revoke <id>" revokes one
   push      Package and publish an agent to a registry
@@ -93,6 +94,8 @@ func runEnv(args []string, stdout, stderr io.Writer, e env) int {
 		return inspect(args[1:], stdout, stderr, e)
 	case "login":
 		return login(args[1:], stdout, stderr, e)
+	case "whoami":
+		return whoami(args[1:], stdout, stderr, e)
 	case "logout":
 		return logout(args[1:], stdout, stderr, e)
 	case "tokens":

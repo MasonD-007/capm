@@ -4,7 +4,6 @@ package store
 
 import (
 	"crypto/sha256"
-	"crypto/subtle"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -56,6 +55,8 @@ type Store struct {
 	// unlink, so a removal can never delete a blob a concurrent publish just
 	// re-used.
 	blobMu sync.Mutex
+	// now is the clock for token expiry and throttling; tests replace it.
+	now func() time.Time
 }
 
 // Open creates dataDir if needed and opens (migrating) the database in it.
@@ -75,7 +76,11 @@ func Open(dataDir string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("store: migrate: %w", err)
 	}
-	return &Store{db: db, blobsDir: blobs}, nil
+	if err := repairTokenIDs(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("store: repair token ids: %w", err)
+	}
+	return &Store{db: db, blobsDir: blobs, now: time.Now}, nil
 }
 
 func (s *Store) Close() error { return s.db.Close() }
@@ -299,33 +304,4 @@ func (s *Store) UpsertUser(id int64, login string) error {
 		return err
 	}
 	return tx.Commit()
-}
-
-// CreateToken stores the hash of an API token for userID. The raw token is
-// never stored.
-func (s *Store) CreateToken(hash []byte, userID int64) error {
-	_, err := s.db.Exec(`INSERT INTO tokens(hash, user_id, created_at) VALUES(?, ?, ?)`,
-		hash, userID, time.Now().Unix())
-	return err
-}
-
-// UserByTokenHash resolves a token hash to the user's id and current login.
-func (s *Store) UserByTokenHash(hash []byte) (int64, string, error) {
-	var (
-		id     int64
-		login  string
-		stored []byte
-	)
-	err := s.db.QueryRow(`SELECT u.id, u.login, t.hash FROM tokens t JOIN users u ON u.id = t.user_id
-		WHERE t.hash = ?`, hash).Scan(&id, &login, &stored)
-	if errors.Is(err, sql.ErrNoRows) {
-		return 0, "", ErrNotFound
-	}
-	if err != nil {
-		return 0, "", err
-	}
-	if subtle.ConstantTimeCompare(stored, hash) != 1 {
-		return 0, "", ErrNotFound
-	}
-	return id, login, nil
 }

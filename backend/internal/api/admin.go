@@ -43,6 +43,7 @@ func (a *API) mountAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /v1/admin/bundles/{owner}/{name}/remove", a.adminRestore(true))
 	mux.HandleFunc("POST /v1/admin/users/{user}/ban", a.adminBan)
 	mux.HandleFunc("DELETE /v1/admin/users/{user}/ban", a.adminUnban)
+	mux.HandleFunc("DELETE /v1/admin/users/{user}/tokens", a.adminRevokeTokens)
 	mux.HandleFunc("GET /v1/admin/log", a.adminLog)
 }
 
@@ -189,6 +190,21 @@ func (a *API) adminUnban(w http.ResponseWriter, r *http.Request) {
 	default:
 		internal(w, err)
 	}
+}
+
+// adminRevokeTokens revokes every token of a user (login or numeric id),
+// audited. The user can log in again to get a new one (unlike a ban).
+func (a *API) adminRevokeTokens(w http.ResponseWriter, r *http.Request) {
+	id, ok := a.resolveUser(w, r.PathValue("user"))
+	if !ok {
+		return
+	}
+	n, err := a.store.RevokeAllTokens(adminOf(r), id)
+	if err != nil {
+		internal(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"id": id, "revoked": n})
 }
 
 func (a *API) adminLog(w http.ResponseWriter, r *http.Request) {

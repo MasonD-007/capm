@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"time"
 )
 
 // A migration changes the schema from version N-1 to N, where N is its
@@ -15,9 +16,13 @@ import (
 // that holds data; ALTER TABLE ... ADD COLUMN ... NOT NULL needs a DEFAULT.
 type migration func(tx *sql.Tx) error
 
+// migrationNow is the clock migrations read; tests replace it.
+var migrationNow = time.Now
+
 var migrations = []migration{
 	migrateV1,
 	migrateV2,
+	migrateV3,
 }
 
 // migrateV1 is the schema as it existed before migrations were introduced.
@@ -71,6 +76,35 @@ CREATE TABLE admin_actions (
 	reason     TEXT NOT NULL DEFAULT '',
 	created_at INTEGER NOT NULL
 );`)
+	return err
+}
+
+// existingTokenLifetime is how long tokens issued before migration 3 keep
+// working after it runs (decided: 90 days).
+const existingTokenLifetime = 90 * 24 * time.Hour
+
+// migrateV3 adds token management. tokens.hash stays the primary key; SQLite
+// cannot add a PRIMARY KEY or UNIQUE column with ALTER TABLE, so id is a
+// plain nullable INTEGER that is backfilled from rowid (distinct by
+// construction) and then protected by a UNIQUE INDEX. Existing tokens expire
+// existingTokenLifetime after the migration. The timestamp is computed once
+// and passed as a parameter.
+func migrateV3(tx *sql.Tx) error {
+	exp := migrationNow().Add(existingTokenLifetime).Unix()
+	for _, q := range []string{
+		`ALTER TABLE tokens ADD COLUMN id INTEGER`,
+		`ALTER TABLE tokens ADD COLUMN name TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE tokens ADD COLUMN expires_at INTEGER`,
+		`ALTER TABLE tokens ADD COLUMN last_used_at INTEGER`,
+		`ALTER TABLE tokens ADD COLUMN revoked_at INTEGER`,
+		`UPDATE tokens SET id = rowid`,
+		`CREATE UNIQUE INDEX tokens_id ON tokens(id)`,
+	} {
+		if _, err := tx.Exec(q); err != nil {
+			return err
+		}
+	}
+	_, err := tx.Exec(`UPDATE tokens SET expires_at = ?`, exp)
 	return err
 }
 

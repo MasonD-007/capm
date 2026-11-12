@@ -105,10 +105,31 @@ bundle has nothing to compare with.
 
 ## Tokens
 
-Registry tokens issued by `capm login` have no expiry and cannot be revoked
-yet. They are stored in plain JSON (mode 0600) in your user config directory.
-Delete the credentials file to log out locally; the token itself stays valid
-on the server.
+Registry tokens issued by `capm login` expire after 90 days by default
+(`TOKEN_TTL_DAYS` on the server; 0 means never). Tokens issued before expiry
+existed were given an expiry of 90 days from the deploy that introduced it. An
+expired token is refused with the same `401` as an unknown one.
+
+The registry stores only the sha256 hash of each token, never the token, so it
+cannot show you a token again and a database leak does not reveal usable
+tokens. Each token has an id, an optional name (`capm login` uses the machine's
+hostname), a last-used date (updated at most hourly) and an expiry. Rows for
+revoked and expired tokens are kept for 30 days for the audit trail, then
+deleted.
+
+Tokens are stored in plain JSON (mode 0600) in your user config directory.
+You can end them yourself:
+
+- `capm logout` revokes this machine's token on the registry and deletes the
+  local credentials. If the registry cannot be reached (or is an older version
+  without revocation), the credentials are still deleted locally, capm says so,
+  and the token stays valid on the server until it expires.
+- `capm tokens` lists your tokens (current one marked `*`); `capm tokens revoke
+  <id>` revokes one, for example for a laptop you lost.
+- An admin can revoke all of a user's tokens with `capm admin revoke-tokens`.
+
+capm warns on stderr when the stored token has under 7 days left. Revocation
+and expiry apply to the token itself; the next `capm login` issues a fresh one.
 
 ## sbx runtime behaviour is unverified
 
@@ -167,7 +188,9 @@ tools, used through `capm admin` (runbook in
   version number can never be published again. The reason is written by an
   admin but is still untrusted text to clients, so the CLI and website
   sanitise it like any registry string.
-- **Bans** of a user. A banned user's tokens stop working, they cannot get a new
+- **Bans** of a user. A banned user's tokens stop working (they are not deleted,
+  so they work again after an unban; use `capm admin revoke-tokens` as well for
+  a permanent cut-off), they cannot get a new
   one, and their bundles disappear from listings and answer 404. A ban is per
   GitHub account, not per person.
 
@@ -184,11 +207,13 @@ The registry at `https://capm.masondrake.dev` is open to the internet, and
 anyone with a GitHub account can publish. That sharpens several of the points
 above. Operating procedures are in [self-hosting.md](self-hosting.md).
 
-- **Tokens cannot be revoked by their owner, and that matters more here.** A
-  leaked token stays valid until an admin acts. Admins can remove versions and
-  ban users (next section), but banning does not keep the person out for good,
-  since any GitHub account can log in again. Treat every bundle from an unknown
-  publisher as untrusted; yanking does not stop pulls of an exact version.
+- **A leaked token is valid until it is revoked or expires (90 days).** Owners
+  can revoke their own tokens (`capm tokens revoke`, `capm logout`) and admins
+  can revoke all of a user's tokens, but a stolen token is usable until someone
+  notices. Admins can also remove versions and ban users (next section), but
+  banning does not keep the person out for good, since any GitHub account can
+  log in again. Treat every bundle from an unknown publisher as untrusted;
+  yanking does not stop pulls of an exact version.
 - **`CLIENT_IP_HEADER` is trusted blindly.** If set (for example to
   `CF-Connecting-IP`), the backend rate-limits on whatever IP that header
   holds, with no check on who sent it. It is safe only if every request

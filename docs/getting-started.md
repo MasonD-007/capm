@@ -98,6 +98,9 @@ export CAPM_REGISTRY=http://localhost:8080   # needed for local development; the
 capm login                         # GitHub device flow; prints a URL and a code
 capm whoami                        # your login on stdout; asks the registry whether the stored token still works
 capm push ./my-bundle              # publishes <your-login>/<metadata.name>@<metadata.version>
+capm tokens                        # your login tokens (id, name, last used, expiry); * marks this machine
+capm tokens revoke 7               # revoke one, e.g. a lost laptop
+capm logout                        # revoke this machine's token and delete the stored credentials
 capm search reviewer               # bundles whose owner, name or description contains "reviewer"
 capm list alice                    # alice's bundles; without an owner, every bundle
 capm inspect alice/pr-reviewer@0.1.0   # declared permissions, without installing
@@ -170,3 +173,11 @@ when the run ends.
 Credentials from `capm login` are stored in your user config directory
 (`~/Library/Application Support/capm/credentials.json` on macOS,
 `~/.config/capm/credentials.json` on Linux).
+
+Login tokens expire after 90 days. capm prints `your capm token expires in N
+days; run capm login` on stderr when a command that signs in finds fewer than
+7 days left; run `capm login` again to get a new token. `capm logout` revokes
+the token on the registry before deleting the credentials; if the registry is
+unreachable it still deletes them locally and tells you the token may remain
+valid until it expires. `capm tokens` and `capm logout` need a registry that
+supports token management and say so when it does not.

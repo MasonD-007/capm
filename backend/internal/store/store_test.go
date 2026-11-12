@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/MasonD-007/capm/manifest"
 )
@@ -196,7 +197,7 @@ func TestTokens(t *testing.T) {
 		t.Fatal(err)
 	}
 	h := []byte("0123456789abcdef0123456789abcdef")
-	if err := s.CreateToken(h, 7); err != nil {
+	if err := s.CreateToken(h, 7, "", time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	id, login, err := s.UserByTokenHash(h)

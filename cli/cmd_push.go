@@ -21,6 +21,7 @@ func push(args []string, stdout, stderr io.Writer, e env) int {
 		fmt.Fprintf(stderr, "capm push: %v\n", err)
 		return 1
 	}
+	defer warnExpiry(stderr, e, creds)
 	data, err := os.ReadFile(filepath.Join(args[0], manifest.FileName))
 	if err != nil {
 		fmt.Fprintf(stderr, "capm push: %v\n", err)

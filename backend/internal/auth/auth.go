@@ -20,6 +20,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/MasonD-007/capm/backend/internal/store"
 )
@@ -31,6 +33,8 @@ type Config struct {
 	// AdminIDs are the GitHub numeric ids allowed to use /v1/admin/ (see
 	// ParseAdminIDs). Empty means there are no admins.
 	AdminIDs []int64
+	// TokenTTL is how long newly issued tokens stay valid; 0 means forever.
+	TokenTTL time.Duration
 }
 
 type Service struct {
@@ -89,6 +93,9 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/auth/device", s.device)
 	mux.HandleFunc("POST /v1/auth/token", s.token)
 	mux.HandleFunc("GET /v1/auth/me", s.me)
+	mux.HandleFunc("GET /v1/auth/tokens", s.listTokens)
+	mux.HandleFunc("DELETE /v1/auth/tokens/current", s.revokeCurrent)
+	mux.HandleFunc("DELETE /v1/auth/tokens/{id}", s.revokeToken)
 	return mux
 }
 
@@ -108,32 +115,50 @@ func hashToken(tok string) []byte {
 	return h[:]
 }
 
-// Authenticate resolves "Authorization: Bearer <token>" to the GitHub id and
-// current login of the token's owner.
-func (s *Service) Authenticate(r *http.Request) (int64, string, bool) {
+// bearerHash extracts the bearer token from r and returns its hash.
+func bearerHash(r *http.Request) ([]byte, bool) {
 	h := r.Header.Get("Authorization")
 	scheme, tok, found := strings.Cut(h, " ")
 	if !found || !strings.EqualFold(scheme, "Bearer") || tok == "" {
-		return 0, "", false
+		return nil, false
 	}
-	id, login, err := s.store.UserByTokenHash(hashToken(strings.TrimSpace(tok)))
+	return hashToken(strings.TrimSpace(tok)), true
+}
+
+// authenticateToken resolves the request's bearer token. Unknown, expired,
+// revoked and banned all give the same false, so a caller cannot tell them
+// apart.
+func (s *Service) authenticateToken(r *http.Request) (store.Token, []byte, bool) {
+	hash, ok := bearerHash(r)
+	if !ok {
+		return store.Token{}, nil, false
+	}
+	tk, err := s.store.LookupToken(hash)
 	if err != nil {
 		if !errors.Is(err, store.ErrNotFound) {
 			log.Printf("auth: token lookup: %v", err)
 		}
-		return 0, "", false
+		return store.Token{}, nil, false
 	}
 	// A banned user's existing tokens stop working. Fail closed if the check
 	// itself errors.
-	banned, err := s.store.IsBanned(id)
+	banned, err := s.store.IsBanned(tk.UserID)
 	if err != nil {
 		log.Printf("auth: ban lookup: %v", err)
-		return 0, "", false
+		return store.Token{}, nil, false
 	}
 	if banned {
-		return 0, "", false
+		return store.Token{}, nil, false
 	}
-	return id, login, true
+	s.store.TouchToken(tk) // at most hourly; never fails the request
+	return tk, hash, true
+}
+
+// Authenticate resolves "Authorization: Bearer <token>" to the GitHub id and
+// current login of the token's owner.
+func (s *Service) Authenticate(r *http.Request) (int64, string, bool) {
+	tk, _, ok := s.authenticateToken(r)
+	return tk.UserID, tk.Login, ok
 }
 
 func (s *Service) configured(w http.ResponseWriter) bool {
@@ -200,6 +225,7 @@ func (s *Service) token(w http.ResponseWriter, r *http.Request) {
 	}
 	var in struct {
 		DeviceCode string `json:"device_code"`
+		Name       string `json:"name"` // optional; older CLIs send none
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&in); err != nil || in.DeviceCode == "" {
 		writeErr(w, http.StatusBadRequest, "device_code is required")
@@ -273,7 +299,7 @@ func (s *Service) token(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tok := base64.RawURLEncoding.EncodeToString(raw)
-	if err := s.store.CreateToken(hashToken(tok), id); err != nil {
+	if err := s.store.CreateToken(hashToken(tok), id, cleanTokenName(in.Name), s.expiry()); err != nil {
 		log.Printf("auth: store token: %v", err)
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
@@ -281,14 +307,124 @@ func (s *Service) token(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]string{"token": tok})
 }
 
+// maxTokenName caps a token's name, in characters.
+const maxTokenName = 64
+
+// cleanTokenName makes a client-supplied token name safe to store and later
+// print: valid UTF-8, no control characters, trimmed, at most 64 characters.
+func cleanTokenName(n string) string {
+	n = strings.ToValidUTF8(n, "")
+	n = strings.Map(func(r rune) rune {
+		// U+FFFD is what JSON decoding turns invalid UTF-8 into.
+		if unicode.IsControl(r) || r == utf8.RuneError {
+			return -1
+		}
+		return r
+	}, n)
+	n = strings.TrimSpace(n)
+	if r := []rune(n); len(r) > maxTokenName {
+		n = strings.TrimSpace(string(r[:maxTokenName]))
+	}
+	return n
+}
+
+// expiry is the expiry for a token issued now; the zero time means never.
+func (s *Service) expiry() time.Time {
+	if s.cfg.TokenTTL <= 0 {
+		return time.Time{}
+	}
+	return time.Now().Add(s.cfg.TokenTTL)
+}
+
 // me reports the identity a bearer token belongs to.
 func (s *Service) me(w http.ResponseWriter, r *http.Request) {
-	id, login, ok := s.Authenticate(r)
+	tk, _, ok := s.authenticateToken(r)
 	if !ok {
 		writeErr(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	writeJSON(w, 200, map[string]any{"id": id, "login": login})
+	out := map[string]any{"id": tk.UserID, "login": tk.Login, "tokenId": tk.ID}
+	if !tk.ExpiresAt.IsZero() {
+		out["tokenExpiresAt"] = tk.ExpiresAt.Format(time.RFC3339)
+	}
+	writeJSON(w, 200, out)
+}
+
+type tokenJSON struct {
+	ID         int64   `json:"id"`
+	Name       string  `json:"name"`
+	CreatedAt  string  `json:"createdAt"`
+	LastUsedAt *string `json:"lastUsedAt,omitempty"`
+	ExpiresAt  *string `json:"expiresAt,omitempty"`
+	Current    bool    `json:"current"`
+}
+
+func rfc3339Ptr(t time.Time) *string {
+	if t.IsZero() {
+		return nil
+	}
+	v := t.Format(time.RFC3339)
+	return &v
+}
+
+// listTokens lists the caller's usable tokens. It never includes hashes.
+func (s *Service) listTokens(w http.ResponseWriter, r *http.Request) {
+	tk, hash, ok := s.authenticateToken(r)
+	if !ok {
+		writeErr(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	list, err := s.store.ListTokens(tk.UserID, hash)
+	if err != nil {
+		log.Printf("auth: list tokens: %v", err)
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	out := make([]tokenJSON, 0, len(list))
+	for _, t := range list {
+		out = append(out, tokenJSON{t.ID, t.Name, t.CreatedAt.Format(time.RFC3339),
+			rfc3339Ptr(t.LastUsedAt), rfc3339Ptr(t.ExpiresAt), t.Current})
+	}
+	writeJSON(w, 200, out)
+}
+
+// revokeToken revokes one of the caller's own tokens by id. Another user's
+// token, an unknown id and a malformed id all answer 404.
+func (s *Service) revokeToken(w http.ResponseWriter, r *http.Request) {
+	tk, _, ok := s.authenticateToken(r)
+	if !ok {
+		writeErr(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id < 1 {
+		writeErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	switch err := s.store.RevokeToken(tk.UserID, id); {
+	case err == nil:
+		w.WriteHeader(http.StatusNoContent)
+	case errors.Is(err, store.ErrNotFound):
+		writeErr(w, http.StatusNotFound, "not found")
+	default:
+		log.Printf("auth: revoke token: %v", err)
+		writeErr(w, http.StatusInternalServerError, "internal error")
+	}
+}
+
+// revokeCurrent revokes the token that signed the request (capm logout).
+func (s *Service) revokeCurrent(w http.ResponseWriter, r *http.Request) {
+	tk, _, ok := s.authenticateToken(r)
+	if !ok {
+		writeErr(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	if err := s.store.RevokeToken(tk.UserID, tk.ID); err != nil && !errors.Is(err, store.ErrNotFound) {
+		log.Printf("auth: revoke current: %v", err)
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Service) githubUser(accessToken string) (int64, string, error) {

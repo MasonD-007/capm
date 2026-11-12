@@ -337,14 +337,14 @@ directly. Follow [Maintenance pod](#maintenance-pod) (backend at 0 replicas,
 ArgoCD paused) up to the `kubectl exec` shell, then `sqlite3 /data/capm.db`.
 The `sqlite3` shell runs with foreign keys off, so do not delete `users` rows.
 
-Schema (schema version 2; see `backend/internal/store/migrate.go`):
+Schema (schema version 3; see `backend/internal/store/migrate.go`):
 
 | Table | Columns |
 |---|---|
 | `users` | `id` (GitHub numeric id), `login` (unique, case-insensitive; renamed accounts are tombstoned as `~<id>`) |
 | `bundles` | `owner_id`, `name` |
 | `versions` | `owner_id`, `name`, `version`, `digest` (`sha256:<hex>`), `yanked`, `manifest` (JSON), `created_at`, `removed` (0 or 1), `removed_reason` |
-| `tokens` | `hash` (sha256 of the token), `user_id`, `created_at` |
+| `tokens` | `hash` (sha256 of the token, primary key), `user_id`, `created_at`, `id` (public handle, unique), `name`, `expires_at` (unix seconds, NULL = never), `last_used_at`, `revoked_at` (NULL = live) |
 | `banned_users` | `user_id` (primary key), `reason`, `created_at` |
 | `admin_actions` | `id`, `admin_id`, `action`, `target`, `reason`, `created_at` |
 | `schema_version` | `version` (one row) |
@@ -386,14 +386,25 @@ VALUES (139420415, 'ban_user', 'user:' || (SELECT id FROM users WHERE login = 'a
 COMMIT;
 ```
 
-Invalidate a user's tokens (stops existing tokens only; a banned user is
-refused new ones, an unbanned user can log in again):
+Invalidate a user's tokens. Normally use `capm admin revoke-tokens <login|id>`,
+which does this and writes the audit row. It stops existing tokens only; a
+banned user is refused new ones, an unbanned user can log in again. The SQL
+fallback revokes rather than deletes, so token ids are never reused (the id is
+the admin's GitHub id, as above):
 
 ```sql
-DELETE FROM tokens
-WHERE user_id = (SELECT id FROM users WHERE login = 'alice');
-SELECT changes();   -- number of tokens removed
+BEGIN;
+UPDATE tokens SET revoked_at = strftime('%s','now')
+WHERE user_id = (SELECT id FROM users WHERE login = 'alice') AND revoked_at IS NULL;
+SELECT changes();   -- number of tokens revoked
+INSERT INTO admin_actions(admin_id, action, target, reason, created_at)
+VALUES (139420415, 'revoke_tokens', 'user:' || (SELECT id FROM users WHERE login = 'alice'), '', strftime('%s','now'));
+COMMIT;
 ```
+
+Do not `DELETE` token rows by hand: the server picks new token ids as the
+highest existing id plus one, so deleting the newest rows lets an id be handed
+out twice.
 
 Leave `sqlite3` with `.quit`, then scale back up as described at the end of
 [Maintenance pod](#maintenance-pod).
@@ -411,11 +422,21 @@ kubectl -n capm logs -f job/backup-pre-migrate     # wait for it to finish
 kubectl -n capm delete job backup-pre-migrate      # afterwards
 ```
 
+**This release (schema version 3) migrates the token table.** Every token
+issued before the deploy gets an expiry of 90 days after the deploy, so users
+who never log in again will be logged out then (`capm login` fixes it, and
+capm warns during the last 7 days). Announce it in the release notes. New
+tokens expire after `TOKEN_TTL_DAYS` (default 90; the ConfigMap does not set it).
+
 Rolling back the image does not undo a migration. The previous release ignores
 the extra columns and tables and keeps working, but removed versions would
-appear live again to it; restore from the snapshot (above) if you need the old
+appear live again to it, and so would revoked and expired tokens (the old
+release ignores `revoked_at` and `expires_at`, and tokens it issues never
+expire); restore from the snapshot (above) if you need the old
 state exactly. A server refuses to start on a database whose
 `schema_version` is newer than it knows.
+
+Expired and revoked token rows older than 30 days are deleted at every startup.
 
 Removed blobs remain in restic snapshots (including this one) until they age out.
 

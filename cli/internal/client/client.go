@@ -32,6 +32,21 @@ type DeviceCode struct {
 type Identity struct {
 	ID    int64  `json:"id"`
 	Login string `json:"login"`
+	// TokenID and TokenExpiresAt (RFC 3339, empty = never expires) describe the
+	// token that made the request. Older registries send neither.
+	TokenID        int64  `json:"tokenId"`
+	TokenExpiresAt string `json:"tokenExpiresAt"`
+}
+
+// TokenInfo is one entry of GET /v1/auth/tokens. The registry never sends the
+// token itself or its hash. Name is untrusted.
+type TokenInfo struct {
+	ID         int64      `json:"id"`
+	Name       string     `json:"name"`
+	CreatedAt  time.Time  `json:"createdAt"`
+	LastUsedAt *time.Time `json:"lastUsedAt"`
+	ExpiresAt  *time.Time `json:"expiresAt"`
+	Current    bool       `json:"current"`
 }
 
 type Resolved struct {
@@ -125,6 +140,8 @@ type Client struct {
 	PollInterval time.Duration
 	// PollTimeout bounds the total time PollToken waits (0 = 15 minutes).
 	PollTimeout time.Duration
+	// TokenName labels the token PollToken obtains (e.g. the hostname).
+	TokenName string
 }
 
 func New(baseURL, token string) *Client {
@@ -237,7 +254,11 @@ func (c *Client) StartDeviceFlow() (DeviceCode, error) {
 // PollToken polls until the user authorizes the device code and returns the
 // capm API token. It waits PollInterval between polls and backs off on slow_down.
 func (c *Client) PollToken(deviceCode string) (string, error) {
-	body, _ := json.Marshal(map[string]string{"device_code": deviceCode})
+	req := map[string]string{"device_code": deviceCode}
+	if c.TokenName != "" {
+		req["name"] = c.TokenName
+	}
+	body, _ := json.Marshal(req)
 	timeout := c.PollTimeout
 	if timeout <= 0 {
 		timeout = 15 * time.Minute
@@ -282,6 +303,46 @@ func (c *Client) Me() (Identity, error) {
 	var id Identity
 	err := c.getJSON("/v1/auth/me", &id)
 	return id, err
+}
+
+// IsUnsupported reports whether err means the registry predates token
+// management: the route does not exist (a 404 that is not the new server's own
+// JSON "not found") or the method is not allowed.
+func IsUnsupported(err error) bool {
+	var ae *APIError
+	if !errors.As(err, &ae) {
+		return false
+	}
+	return ae.Status == http.StatusMethodNotAllowed || (ae.Status == http.StatusNotFound && ae.Msg != "not found")
+}
+
+// Tokens lists the caller's active tokens.
+func (c *Client) Tokens() ([]TokenInfo, error) {
+	var out []TokenInfo
+	err := c.getJSON("/v1/auth/tokens", &out)
+	return out, err
+}
+
+// RevokeToken revokes one of the caller's tokens by id.
+func (c *Client) RevokeToken(id int64) error {
+	_, err := c.do("DELETE", "/v1/auth/tokens/"+strconv.FormatInt(id, 10), nil, MaxJSONBytes)
+	return err
+}
+
+// RevokeCurrentToken revokes the token this client authenticates with.
+func (c *Client) RevokeCurrentToken() error {
+	_, err := c.do("DELETE", "/v1/auth/tokens/current", nil, MaxJSONBytes)
+	return err
+}
+
+// AdminRevokeTokens revokes every token of a user (login or numeric id) and
+// returns how many were revoked.
+func (c *Client) AdminRevokeTokens(user string) (int, error) {
+	var out struct {
+		Revoked int `json:"revoked"`
+	}
+	err := c.adminJSON("DELETE", "/v1/admin/users/"+esc(user)+"/tokens", nil, &out)
+	return out.Revoked, err
 }
 
 func (c *Client) Publish(owner, name, version string, tarball []byte) error {

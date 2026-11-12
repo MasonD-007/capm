@@ -3,11 +3,13 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -28,6 +30,21 @@ func envInt(key string, def int) int {
 		log.Fatalf("%s must be a positive integer, got %q", key, v)
 	}
 	return n
+}
+
+// parseTokenTTLDays parses TOKEN_TTL_DAYS: empty means 90, 0 means tokens
+// never expire, anything negative, non-numeric or absurdly large is an error
+// (the server refuses to start rather than guess about a security setting).
+func parseTokenTTLDays(v string) (time.Duration, error) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return 90 * 24 * time.Hour, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 || n > 36500 {
+		return 0, fmt.Errorf("TOKEN_TTL_DAYS must be a whole number of days from 0 (never expires) to 36500, got %q", v)
+	}
+	return time.Duration(n) * 24 * time.Hour, nil
 }
 
 func main() {
@@ -60,7 +77,22 @@ func main() {
 		log.Print("ADMIN_GITHUB_IDS is unset: /v1/admin/* is disabled")
 	}
 
+	tokenTTL, err := parseTokenTTLDays(os.Getenv("TOKEN_TTL_DAYS"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	if tokenTTL == 0 {
+		log.Print("TOKEN_TTL_DAYS=0: new API tokens never expire")
+	}
+	// Housekeeping: forget tokens that expired or were revoked over 30 days ago.
+	if n, err := st.PurgeTokens(); err != nil {
+		log.Printf("purge old tokens: %v", err)
+	} else if n > 0 {
+		log.Printf("purged %d old token rows", n)
+	}
+
 	authSvc := auth.New(st, auth.Config{
+		TokenTTL: tokenTTL,
 		AdminIDs: admins,
 		ClientID: os.Getenv("GITHUB_CLIENT_ID"),
 		APIURL:   os.Getenv("GITHUB_API_URL"),
@@ -74,7 +106,9 @@ func main() {
 		PublishPerHour: envInt("PUBLISH_RATE_PER_HOUR", 30),
 		IsAdmin:        authSvc.IsAdmin,
 	})
-	// The unauthenticated auth routes proxy to GitHub, so limit them per IP.
+	// The auth routes proxy to GitHub, so limit them per IP. The limiter wraps
+	// the whole /v1/auth/ handler, so it also covers the authenticated token
+	// routes (me, tokens, revoke); that is fine at CLI volumes.
 	// X-Forwarded-For is only honoured when TRUSTED_PROXY=true; CLIENT_IP_HEADER
 	// (e.g. CF-Connecting-IP) takes precedence when set and valid.
 	authLim := api.NewLimiter(envInt("AUTH_RATE_PER_MINUTE", 30), time.Minute, nil)

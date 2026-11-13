@@ -191,6 +191,8 @@ func runCommand(args []string, stdout, stderr io.Writer, e env) int {
 		return outdated(args[1:], stdout, stderr, e)
 	case "completion":
 		return completion(args[1:], stdout, stderr, e)
+	case "__complete": // hidden: the shell completion scripts call it (cmd_complete.go)
+		return completeCmd(args[1:], stdout, e)
 	case "version":
 		fmt.Fprintf(stdout, "capm %s\n", version)
 		return 0

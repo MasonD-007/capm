@@ -47,6 +47,9 @@ func (a *API) mountAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/admin/users/{user}/quota", a.adminGetQuota)
 	mux.HandleFunc("PUT /v1/admin/users/{user}/quota", a.adminSetQuota)
 	mux.HandleFunc("GET /v1/admin/log", a.adminLog)
+	mux.HandleFunc("GET /v1/admin/reports", a.adminListReports)
+	mux.HandleFunc("GET /v1/admin/reports/{id}", a.adminGetReport)
+	mux.HandleFunc("POST /v1/admin/reports/{id}/resolve", a.adminResolveReport)
 }
 
 func adminOf(r *http.Request) int64 { id, _ := r.Context().Value(adminKey{}).(int64); return id }

@@ -30,7 +30,7 @@ func stripUnsafe(s string) string {
 // firstLine is the first non-blank line of attacker-controlled text,
 // sanitised and cut to max runes. Splitting happens before sanitising, so a
 // line break can never survive into a table cell.
-func firstLine(s string, max int) string {
+func reportFirstLine(s string, max int) string {
 	for _, l := range strings.FieldsFunc(s, func(r rune) bool {
 		return r == '\n' || r == '\r' || r == ' ' || r == ' ' || r == '\u0085'
 	}) {
@@ -182,7 +182,7 @@ func adminReports(sub string, args []string, stdout, stderr io.Writer, e env) in
 				st += " (resolved)"
 			}
 			fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s\t%s\n", r.ID, client.Sanitize(reportBundle(client.ReportInfo{Owner: r.Owner, Name: r.Name})),
-				version, client.Sanitize(r.Reason), reportAge(now, r.CreatedAt), st, firstLine(r.Details, reportDetailsCol))
+				version, client.Sanitize(r.Reason), reportAge(now, r.CreatedAt), st, reportFirstLine(r.Details, reportDetailsCol))
 		}
 		tw.Flush()
 	}

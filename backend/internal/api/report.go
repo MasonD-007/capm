@@ -140,8 +140,8 @@ func (a *API) report(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var reporter int64
-	if id, _, ok := a.authenticate(r); ok {
-		reporter = id
+	if tk, ok := a.optionalCaller(r); ok {
+		reporter = tk.UserID
 	}
 	owner, name := r.PathValue("owner"), r.PathValue("name")
 	res, err := a.store.AddReport(store.ReportInput{

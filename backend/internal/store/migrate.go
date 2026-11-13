@@ -27,6 +27,7 @@ var migrations = []migration{
 	migrateV5,
 	migrateV6,
 	migrateV7,
+	migrateV8,
 }
 
 // migrateV1 is the schema as it existed before migrations were introduced.
@@ -194,6 +195,23 @@ CREATE TABLE reports (
 );
 CREATE INDEX reports_open ON reports(created_at DESC, id DESC) WHERE resolved_at IS NULL;
 CREATE INDEX reports_dedup ON reports(owner_id, name, reporter_key, created_at);`)
+	return err
+}
+
+// migrateV8 adds token scopes and publish provenance (publishing from CI).
+//
+// tokens.scope: empty means a full token (every row that exists today, and every row
+// an older release inserts, since it omits the column); "publish" may only
+// publish. tokens.claims is the JSON of the OIDC claims recorded for a CI
+// token. versions.published_via is a compact JSON record (repository,
+// repository_id, workflow_ref, sha, run_id) for a version published with such
+// a token, empty otherwise. Pure ADD COLUMN with constant defaults: no row is
+// rewritten and nothing is rebuilt.
+func migrateV8(tx *sql.Tx) error {
+	_, err := tx.Exec(`
+ALTER TABLE tokens ADD COLUMN scope TEXT NOT NULL DEFAULT '';
+ALTER TABLE tokens ADD COLUMN claims TEXT NOT NULL DEFAULT '';
+ALTER TABLE versions ADD COLUMN published_via TEXT NOT NULL DEFAULT '';`)
 	return err
 }
 

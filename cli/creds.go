@@ -7,7 +7,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
+	"unicode"
+
+	"github.com/MasonD-007/capm/cli/internal/client"
 )
 
 // credentials is the on-disk login state. The token is only valid for the
@@ -19,6 +23,9 @@ type credentials struct {
 	// ExpiresAt is the token's expiry (RFC 3339), empty when it never expires
 	// or the file predates expiry.
 	ExpiresAt string `json:"expiresAt,omitempty"`
+	// fromEnv marks credentials that came from CAPM_TOKEN rather than the
+	// file. It is never serialised: an environment token is never saved.
+	fromEnv bool
 }
 
 func credPath(e env) (string, error) {
@@ -61,7 +68,51 @@ func saveCreds(e env, c credentials) error {
 
 var errNotLoggedIn = errors.New("not logged in to this registry: run capm login")
 
+// envToken is CAPM_TOKEN, trimmed ("" when unset or empty).
+func (e env) envToken() string { return strings.TrimSpace(e.getEnv("CAPM_TOKEN")) }
+
+// loadCreds is the credential for e.registry: CAPM_TOKEN when it is set and
+// non-empty (for CI; used instead of the file, never written), else the
+// stored login. CAPM_OWNER names the GitHub login an env token publishes as;
+// a publish-only CI token cannot be asked (see withLogin).
 func loadCreds(e env) (credentials, error) {
+	tok := e.envToken()
+	if tok == "" {
+		return loadCredsFile(e)
+	}
+	if strings.IndexFunc(tok, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) >= 0 {
+		return credentials{}, errors.New("CAPM_TOKEN contains whitespace or control characters")
+	}
+	c := credentials{Registry: e.registry, Token: tok, fromEnv: true}
+	if o := strings.TrimSpace(e.getEnv("CAPM_OWNER")); o != "" {
+		if !segRe.MatchString(o) {
+			return credentials{}, errors.New("CAPM_OWNER is not a valid GitHub login")
+		}
+		c.Login = o
+	}
+	return c, nil
+}
+
+// withLogin fills in Login for credentials that lack it (an env token without
+// CAPM_OWNER) by asking the registry. A publish-scoped token is refused there,
+// and the error says to set CAPM_OWNER.
+func (c credentials) withLogin(e env) (credentials, error) {
+	if c.Login != "" {
+		return c, nil
+	}
+	id, err := client.New(e.registry, c.Token).Me()
+	if err != nil {
+		return c, fmt.Errorf("cannot tell which GitHub login CAPM_TOKEN belongs to (%v); set CAPM_OWNER to the login that owns the bundle namespace", err)
+	}
+	if !segRe.MatchString(id.Login) {
+		return c, errors.New("the registry returned an invalid login for CAPM_TOKEN")
+	}
+	c.Login = id.Login
+	return c, nil
+}
+
+// loadCredsFile reads the stored credentials for e.registry.
+func loadCredsFile(e env) (credentials, error) {
 	var c credentials
 	p, err := credPath(e)
 	if err != nil {

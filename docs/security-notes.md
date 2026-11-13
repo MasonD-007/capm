@@ -195,6 +195,78 @@ You can end them yourself:
 capm warns on stderr when the stored token has under 7 days left. Revocation
 and expiry apply to the token itself; the next `capm login` issues a fresh one.
 
+## Publishing from GitHub Actions (OIDC)
+
+A workflow can exchange its GitHub OIDC token at `POST /v1/auth/oidc` for a
+registry token and publish with it (see "Publish from GitHub Actions" in the
+getting-started guide).
+
+**What a successful exchange proves.** GitHub signed (RS256, key from GitHub's
+JWKS) a token saying that a workflow in a repository owned by the GitHub user
+with id `repository_owner_id` is running, in response to an event other than a
+pull request, and asked for a token for this registry's audience. The registry
+then treats the publish as coming from that GitHub user, the same account a
+`capm login` by that user would be.
+
+**What it does not prove.**
+
+- Who triggered the run. Anyone who can make the workflow run (push access, or
+  a `workflow_dispatch`) causes a publish as the owner.
+- That the published bundle matches the repository's contents. The workflow
+  packs whatever is in its working directory; a step can alter it.
+- That the repository, the workflow or the Actions it uses are trustworthy.
+  Anyone with write access to a repository owned by the user, and any Action
+  that repository's workflows run (including third-party Actions and their
+  dependencies), can publish as that user. Pin Actions to commit SHAs and treat
+  write access to the repository like the publisher's password.
+- Nothing about the bundle's safety. `publishedVia` on a version
+  (`repository`, `workflowRef`, `sha`) is provenance recorded from a verified
+  token; it is not a "verified publisher" mark and the registry does not use it
+  to rank or approve anything. Anyone can also publish by hand under their own
+  login.
+
+**What the registry refuses.** Tokens that are not RS256 or have no `kid`;
+signatures that do not verify against keys fetched from the configured issuer
+(`OIDC_ISSUER`, default `https://token.actions.githubusercontent.com`; the keys
+URL is configured, never taken from the token); an `iss` or `aud` that is not
+exactly the configured values (an `aud` array is accepted only with that single
+element); expired tokens, tokens not yet valid, or lived longer than an hour
+(60 second clock skew); a missing `jti`. A `repository` that does not belong to
+`repository_owner`. **Pull request events:** any `event_name` starting with
+`pull_request` is refused, because a pull request, a fork's included, must not
+be able to publish. For `pull_request_target` GitHub's `ref` and `sub` claims
+look exactly like a push to the base branch, so `event_name` is the only signal.
+GitHub's claims do not say whether the owner is a user or an organisation, so
+the registry asks GitHub's API (`GET /user/<id>`, unauthenticated, cached for 2
+minutes); if that lookup fails, the exchange fails (503). Organisation-owned
+repositories are refused until organisation namespaces exist. Banned users are
+refused as at login.
+
+**The minted token.** It has scope `publish` and a fixed 15 minute lifetime
+(not `TOKEN_TTL_DAYS`), is not renewable, and is named `ci:<repository>`. It can
+call exactly one route, `PUT /v1/bundles/{owner}/{name}/{version}`, for its own
+user. Every other authenticated route (yank, token management, usage, `me`,
+admin) answers it 403, and a route added later is closed to it by default.
+Quotas, publish rate limits, duplicate and validation checks apply as to any
+publish. The owner sees these tokens in `capm tokens` and can revoke them; an
+account may hold at most 20 live CI tokens, so valid GitHub tokens (anyone can
+mint one for any audience) cannot flood the table.
+
+**Replay.** Each accepted `jti` is remembered in memory until the ID token's
+expiry plus the 60 second skew, so the same ID token cannot be exchanged twice
+(401). The memory is a bounded set (10,000 entries); when it is full of live
+entries the registry answers 503 rather than forget. It is per process: a
+restart forgets it, so a token captured before a deploy can be replayed once
+afterwards while it is still unexpired (at most an hour, typically minutes). An
+ID token is a bearer credential: treat it like the registry token it buys.
+
+**If GitHub's JWKS is unreachable.** Keys are cached in memory (refetched after
+an hour, at most once a minute even after a failure, and an unknown `kid` only
+triggers a refetch if the last attempt is over a minute old). A cached key keeps
+working while the last successful fetch is under 24 hours old; past that, and
+when no keys were ever fetched, exchanges fail closed with 503 and
+`Retry-After`. Publishing with a normal `capm login` token is unaffected.
+
 ## sbx runtime behaviour is unverified
 
 Nothing in `capm run` has been exercised against a real sandbox: sbx needs a

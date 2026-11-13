@@ -35,6 +35,8 @@ type Config struct {
 	AdminIDs []int64
 	// TokenTTL is how long newly issued tokens stay valid; 0 means forever.
 	TokenTTL time.Duration
+	// OIDC enables POST /v1/auth/oidc (publish from CI); nil disables it.
+	OIDC *OIDCConfig
 }
 
 type Service struct {
@@ -42,6 +44,7 @@ type Service struct {
 	cfg   Config
 	hc    *http.Client
 	admin map[int64]bool
+	oidc  *oidcState // nil = endpoint disabled
 }
 
 func New(st *store.Store, cfg Config) *Service {
@@ -57,7 +60,11 @@ func New(st *store.Store, cfg Config) *Service {
 	for _, id := range cfg.AdminIDs {
 		admin[id] = true
 	}
-	return &Service{store: st, cfg: cfg, hc: &http.Client{Timeout: 15 * time.Second}, admin: admin}
+	svc := &Service{store: st, cfg: cfg, hc: &http.Client{Timeout: 15 * time.Second}, admin: admin}
+	if cfg.OIDC != nil {
+		svc.oidc = newOIDCState(cfg.OIDC)
+	}
+	return svc
 }
 
 // ParseAdminIDs parses the ADMIN_GITHUB_IDS value: comma-separated positive
@@ -87,16 +94,29 @@ func ParseAdminIDs(v string) ([]int64, error) {
 // IsAdmin reports whether GitHub user id is configured as an admin.
 func (s *Service) IsAdmin(id int64) bool { return s.admin[id] }
 
+// register is the single list of routes (see api.API.register).
+func (s *Service) register(handle func(pattern string, h func(http.ResponseWriter, *http.Request))) {
+	handle("POST /v1/auth/device", s.device)
+	handle("POST /v1/auth/token", s.token)
+	handle("POST /v1/auth/oidc", s.oidcExchange)
+	handle("GET /v1/auth/me", s.me)
+	handle("GET /v1/auth/usage", s.usage)
+	handle("GET /v1/auth/tokens", s.listTokens)
+	handle("DELETE /v1/auth/tokens/current", s.revokeCurrent)
+	handle("DELETE /v1/auth/tokens/{id}", s.revokeToken)
+}
+
+// Routes lists the patterns Handler serves ("METHOD /path").
+func (s *Service) Routes() []string {
+	var out []string
+	s.register(func(p string, _ func(http.ResponseWriter, *http.Request)) { out = append(out, p) })
+	return out
+}
+
 // Handler serves /v1/auth/*.
 func (s *Service) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /v1/auth/device", s.device)
-	mux.HandleFunc("POST /v1/auth/token", s.token)
-	mux.HandleFunc("GET /v1/auth/me", s.me)
-	mux.HandleFunc("GET /v1/auth/usage", s.usage)
-	mux.HandleFunc("GET /v1/auth/tokens", s.listTokens)
-	mux.HandleFunc("DELETE /v1/auth/tokens/current", s.revokeCurrent)
-	mux.HandleFunc("DELETE /v1/auth/tokens/{id}", s.revokeToken)
+	s.register(mux.HandleFunc)
 	return mux
 }
 
@@ -126,10 +146,12 @@ func bearerHash(r *http.Request) ([]byte, bool) {
 	return hashToken(strings.TrimSpace(tok)), true
 }
 
-// authenticateToken resolves the request's bearer token. Unknown, expired,
-// revoked and banned all give the same false, so a caller cannot tell them
-// apart.
-func (s *Service) authenticateToken(r *http.Request) (store.Token, []byte, bool) {
+// lookupBearer resolves the request's bearer token, whatever its scope.
+// Unknown, expired, revoked and banned all give the same false, so a caller
+// cannot tell them apart. Route handlers must not call this directly: they use
+// requireFull, which refuses scoped tokens, so that a route written later is
+// closed to them by default.
+func (s *Service) lookupBearer(r *http.Request) (store.Token, []byte, bool) {
 	hash, ok := bearerHash(r)
 	if !ok {
 		return store.Token{}, nil, false
@@ -155,11 +177,39 @@ func (s *Service) authenticateToken(r *http.Request) (store.Token, []byte, bool)
 	return tk, hash, true
 }
 
+// requireFull authenticates a route that needs a full-power token: it writes
+// 401 for no valid token and 403 for a scoped one.
+func (s *Service) requireFull(w http.ResponseWriter, r *http.Request) (store.Token, []byte, bool) {
+	tk, hash, ok := s.lookupBearer(r)
+	if !ok {
+		writeErr(w, http.StatusUnauthorized, "authentication required")
+		return store.Token{}, nil, false
+	}
+	if tk.Scope != "" {
+		writeErr(w, http.StatusForbidden, "this token is publish-scoped (issued to a CI workflow) and can only publish bundles under its own login")
+		return store.Token{}, nil, false
+	}
+	return tk, hash, true
+}
+
 // Authenticate resolves "Authorization: Bearer <token>" to the GitHub id and
-// current login of the token's owner.
+// current login of the token's owner. It answers ok only for a full-power
+// token: a scoped token is not accepted by anything still using this
+// signature (AuthenticateDetail carries the scope for callers that handle it).
 func (s *Service) Authenticate(r *http.Request) (int64, string, bool) {
-	tk, _, ok := s.authenticateToken(r)
-	return tk.UserID, tk.Login, ok
+	tk, _, ok := s.lookupBearer(r)
+	if !ok || tk.Scope != "" {
+		return 0, "", false
+	}
+	return tk.UserID, tk.Login, true
+}
+
+// AuthenticateDetail is Authenticate for the API package: it also returns
+// scoped tokens, with their scope and claims, and the API decides what each
+// scope may call.
+func (s *Service) AuthenticateDetail(r *http.Request) (store.Token, bool) {
+	tk, _, ok := s.lookupBearer(r)
+	return tk, ok
 }
 
 func (s *Service) configured(w http.ResponseWriter) bool {
@@ -340,9 +390,8 @@ func (s *Service) expiry() time.Time {
 // usage reports the caller's storage usage and the limits that apply to them
 // (0 = unlimited).
 func (s *Service) usage(w http.ResponseWriter, r *http.Request) {
-	tk, _, ok := s.authenticateToken(r)
+	tk, _, ok := s.requireFull(w, r)
 	if !ok {
-		writeErr(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 	u, err := s.store.Usage(tk.UserID)
@@ -357,9 +406,8 @@ func (s *Service) usage(w http.ResponseWriter, r *http.Request) {
 
 // me reports the identity a bearer token belongs to.
 func (s *Service) me(w http.ResponseWriter, r *http.Request) {
-	tk, _, ok := s.authenticateToken(r)
+	tk, _, ok := s.requireFull(w, r)
 	if !ok {
-		writeErr(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 	out := map[string]any{"id": tk.UserID, "login": tk.Login, "tokenId": tk.ID}
@@ -376,6 +424,8 @@ type tokenJSON struct {
 	LastUsedAt *string `json:"lastUsedAt,omitempty"`
 	ExpiresAt  *string `json:"expiresAt,omitempty"`
 	Current    bool    `json:"current"`
+	// Scope is present only for scoped (CI) tokens.
+	Scope string `json:"scope,omitempty"`
 }
 
 func rfc3339Ptr(t time.Time) *string {
@@ -388,9 +438,8 @@ func rfc3339Ptr(t time.Time) *string {
 
 // listTokens lists the caller's usable tokens. It never includes hashes.
 func (s *Service) listTokens(w http.ResponseWriter, r *http.Request) {
-	tk, hash, ok := s.authenticateToken(r)
+	tk, hash, ok := s.requireFull(w, r)
 	if !ok {
-		writeErr(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 	list, err := s.store.ListTokens(tk.UserID, hash)
@@ -402,7 +451,7 @@ func (s *Service) listTokens(w http.ResponseWriter, r *http.Request) {
 	out := make([]tokenJSON, 0, len(list))
 	for _, t := range list {
 		out = append(out, tokenJSON{t.ID, t.Name, t.CreatedAt.Format(time.RFC3339),
-			rfc3339Ptr(t.LastUsedAt), rfc3339Ptr(t.ExpiresAt), t.Current})
+			rfc3339Ptr(t.LastUsedAt), rfc3339Ptr(t.ExpiresAt), t.Current, t.Scope})
 	}
 	writeJSON(w, 200, out)
 }
@@ -410,9 +459,8 @@ func (s *Service) listTokens(w http.ResponseWriter, r *http.Request) {
 // revokeToken revokes one of the caller's own tokens by id. Another user's
 // token, an unknown id and a malformed id all answer 404.
 func (s *Service) revokeToken(w http.ResponseWriter, r *http.Request) {
-	tk, _, ok := s.authenticateToken(r)
+	tk, _, ok := s.requireFull(w, r)
 	if !ok {
-		writeErr(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
@@ -433,9 +481,8 @@ func (s *Service) revokeToken(w http.ResponseWriter, r *http.Request) {
 
 // revokeCurrent revokes the token that signed the request (capm logout).
 func (s *Service) revokeCurrent(w http.ResponseWriter, r *http.Request) {
-	tk, _, ok := s.authenticateToken(r)
+	tk, _, ok := s.requireFull(w, r)
 	if !ok {
-		writeErr(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 	if err := s.store.RevokeToken(tk.UserID, tk.ID); err != nil && !errors.Is(err, store.ErrNotFound) {

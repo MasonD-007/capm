@@ -63,6 +63,10 @@ func push(args []string, stdout, stderr io.Writer, e env) int {
 		fmt.Fprintf(stderr, "capm push: %v\n", err)
 		return 1
 	}
+	if creds, err = creds.withLogin(e); err != nil {
+		fmt.Fprintf(stderr, "capm push: %v\n", err)
+		return 1
+	}
 	c := client.New(e.registry, creds.Token)
 	if err := c.Publish(creds.Login, m.Metadata.Name, m.Metadata.Version, tarball); err != nil {
 		// A quota rejection carries a sentence written for the publisher

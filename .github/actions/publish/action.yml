@@ -1,0 +1,40 @@
+name: capm publish
+description: Lint and publish a capm bundle from GitHub Actions using the job's OIDC identity (no stored secret).
+
+inputs:
+  directory:
+    description: Directory containing capm.yaml.
+    required: false
+    default: '.'
+  registry:
+    description: Registry base URL. Also the audience of the OIDC token.
+    required: false
+    default: 'https://capm.masondrake.dev'
+  version:
+    description: 'capm CLI release to install: "latest" or a release tag such as cli-<sha>.'
+    required: false
+    default: 'latest'
+  strict:
+    description: 'Run capm lint --strict (warnings fail the job).'
+    required: false
+    default: 'true'
+
+# The calling job needs `permissions: id-token: write`; without it the action
+# stops with an error that says so.
+runs:
+  using: composite
+  steps:
+    - name: Install capm
+      shell: bash
+      env:
+        INPUT_REGISTRY: ${{ inputs.registry }}
+        INPUT_VERSION: ${{ inputs.version }}
+      run: bash "$GITHUB_ACTION_PATH/publish.sh" install
+
+    - name: Lint and publish
+      shell: bash
+      env:
+        INPUT_DIRECTORY: ${{ inputs.directory }}
+        INPUT_REGISTRY: ${{ inputs.registry }}
+        INPUT_STRICT: ${{ inputs.strict }}
+      run: bash "$GITHUB_ACTION_PATH/publish.sh" publish

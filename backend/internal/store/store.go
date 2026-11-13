@@ -47,6 +47,9 @@ type Version struct {
 	RemovedReason string
 	Manifest      manifest.Manifest
 	CreatedAt     time.Time
+	// PublishedVia is the compact JSON provenance record of a version
+	// published with a CI token (see PublishVia); "" for every other version.
+	PublishedVia string
 }
 
 type Store struct {
@@ -120,6 +123,12 @@ func isUnique(err error) bool {
 // to a temp file, the row inserted in a transaction, and the blob renamed into
 // place before commit; any failure leaves no new blob behind.
 func (s *Store) Publish(ownerID int64, ownerLogin, name, version string, tarball []byte) error {
+	return s.PublishVia(ownerID, ownerLogin, name, version, tarball, "")
+}
+
+// PublishVia is Publish that also records via, the JSON provenance of a CI
+// token ("" for none), in the same transaction as the version row.
+func (s *Store) PublishVia(ownerID int64, ownerLogin, name, version string, tarball []byte, via string) error {
 	tmp, err := os.MkdirTemp("", "capm-unpack-")
 	if err != nil {
 		return err
@@ -190,8 +199,8 @@ func (s *Store) Publish(ownerID int64, ownerLogin, name, version string, tarball
 	if err := s.checkQuota(tx, ownerID, name, "sha256:"+hexsum, int64(len(tarball))); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`INSERT INTO versions(owner_id, name, version, digest, manifest, created_at, size, readme)
-		VALUES(?, ?, ?, ?, ?, ?, ?, ?)`, ownerID, name, version, "sha256:"+hexsum, string(mj), s.now().Unix(), len(tarball), readme); err != nil {
+	if _, err := tx.Exec(`INSERT INTO versions(owner_id, name, version, digest, manifest, created_at, size, readme, published_via)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`, ownerID, name, version, "sha256:"+hexsum, string(mj), s.now().Unix(), len(tarball), readme, via); err != nil {
 		if isUnique(err) {
 			return ErrVersionExists
 		}
@@ -213,7 +222,7 @@ func (s *Store) Publish(ownerID int64, ownerLogin, name, version string, tarball
 }
 
 func (s *Store) Versions(ownerLogin, name string) ([]Version, error) {
-	rows, err := s.db.Query(`SELECT v.owner_id, v.version, v.digest, v.yanked, v.manifest, v.created_at, v.removed, v.removed_reason
+	rows, err := s.db.Query(`SELECT v.owner_id, v.version, v.digest, v.yanked, v.manifest, v.created_at, v.removed, v.removed_reason, v.published_via
 		FROM versions v JOIN users u ON u.id = v.owner_id
 		WHERE u.login = ? AND v.name = ?`+notBanned+` ORDER BY v.created_at, v.rowid`, ownerLogin, name)
 	if err != nil {
@@ -229,7 +238,7 @@ func (s *Store) Versions(ownerLogin, name string) ([]Version, error) {
 			created int64
 			removed int
 		)
-		if err := rows.Scan(&v.OwnerID, &v.Version, &v.Digest, &yanked, &mj, &created, &removed, &v.RemovedReason); err != nil {
+		if err := rows.Scan(&v.OwnerID, &v.Version, &v.Digest, &yanked, &mj, &created, &removed, &v.RemovedReason, &v.PublishedVia); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal([]byte(mj), &v.Manifest); err != nil {

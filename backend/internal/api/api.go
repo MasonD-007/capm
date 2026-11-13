@@ -37,10 +37,22 @@ type Config struct {
 	// ReportSalt keys reporter hashes; nil means a fresh random salt (tests
 	// only set it).
 	ReportSalt []byte
+	// AuthDetail, when set, replaces the AuthFunc passed to New: it resolves
+	// the bearer token with its scope and claims (see auth.AuthenticateDetail).
+	// Without it every caller is a full-power caller, which is what tests that
+	// predate token scopes rely on.
+	AuthDetail func(r *http.Request) (store.Token, bool)
 }
 
-// AuthFunc identifies the caller of a write request.
+// AuthFunc identifies the caller of a write request. It must only ever
+// return ok for a full-power token (see Config.AuthDetail for scoped ones).
 type AuthFunc func(r *http.Request) (id int64, login string, ok bool)
+
+// publishRoute is the one authenticated route a publish-scoped token may call.
+const publishRoute = "PUT /v1/bundles/{owner}/{name}/{version}"
+
+// ScopePublish is the scope of tokens minted for CI: publish only.
+const ScopePublish = "publish"
 
 type API struct {
 	store        *store.Store
@@ -74,19 +86,74 @@ func NewWithConfig(s *store.Store, auth AuthFunc, cfg Config) *API {
 		reportLim: NewLimiter(cfg.ReportPerHour, time.Hour, cfg.Now)}
 }
 
+// register is the single list of routes. Handler mounts them on a mux and
+// Routes reports their patterns, so a test that enumerates Routes sees exactly
+// what is served.
+func (a *API) register(handle func(pattern string, h func(http.ResponseWriter, *http.Request))) {
+	handle("GET /v1/bundles", a.list)
+	handle("GET /v1/bundles/{owner}/{name}", a.versions)
+	handle("GET /v1/bundles/{owner}/{name}/{version}", a.metadata)
+	handle("GET /v1/bundles/{owner}/{name}/{version}/download", a.download)
+	handle("GET /v1/bundles/{owner}/{name}/resolve", a.resolve)
+	handle(publishRoute, a.publish)
+	handle("POST /v1/bundles/{owner}/{name}/report", a.report)
+	handle("POST /v1/bundles/{owner}/{name}/{version}/yank", a.yank(true))
+	handle("DELETE /v1/bundles/{owner}/{name}/{version}/yank", a.yank(false))
+	a.mountAdmin(handle)
+}
+
+// Routes lists the patterns Handler serves ("METHOD /path").
+func (a *API) Routes() []string {
+	var out []string
+	a.register(func(p string, _ func(http.ResponseWriter, *http.Request)) { out = append(out, p) })
+	return out
+}
+
 func (a *API) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /v1/bundles", a.list)
-	mux.HandleFunc("GET /v1/bundles/{owner}/{name}", a.versions)
-	mux.HandleFunc("GET /v1/bundles/{owner}/{name}/{version}", a.metadata)
-	mux.HandleFunc("GET /v1/bundles/{owner}/{name}/{version}/download", a.download)
-	mux.HandleFunc("GET /v1/bundles/{owner}/{name}/resolve", a.resolve)
-	mux.HandleFunc("PUT /v1/bundles/{owner}/{name}/{version}", a.publish)
-	mux.HandleFunc("POST /v1/bundles/{owner}/{name}/report", a.report)
-	mux.HandleFunc("POST /v1/bundles/{owner}/{name}/{version}/yank", a.yank(true))
-	mux.HandleFunc("DELETE /v1/bundles/{owner}/{name}/{version}/yank", a.yank(false))
-	a.mountAdmin(mux)
+	a.register(mux.HandleFunc)
 	return a.adminGate(noTombstones(mux))
+}
+
+// resolveCaller authenticates r without writing a response.
+func (a *API) resolveCaller(r *http.Request) (store.Token, bool) {
+	if a.cfg.AuthDetail != nil {
+		return a.cfg.AuthDetail(r)
+	}
+	id, login, ok := a.authenticate(r)
+	return store.Token{UserID: id, Login: login}, ok
+}
+
+// scopeRefused is the 403 body for a scoped token on a route it may not use.
+const scopeRefused = "this token is publish-scoped (issued to a CI workflow) and can only publish bundles under its own login"
+
+// caller authenticates r for a route that needs a signed-in user and writes
+// the 401 or 403 itself. Scoped tokens are allow-listed here, in one place:
+// a "publish" token passes only on publishRoute, and a token whose scope is
+// anything else (including one a future release adds) is refused everywhere.
+// Every handler that needs an identity calls this, so a new route is closed to
+// scoped tokens by default.
+func (a *API) caller(w http.ResponseWriter, r *http.Request) (store.Token, bool) {
+	tk, ok := a.resolveCaller(r)
+	if !ok {
+		writeErr(w, 401, "authentication required")
+		return store.Token{}, false
+	}
+	if tk.Scope != "" && !(tk.Scope == ScopePublish && r.Pattern == publishRoute) {
+		writeErr(w, 403, scopeRefused)
+		return store.Token{}, false
+	}
+	return tk, true
+}
+
+// optionalCaller identifies r's caller for routes that work anonymously. A
+// scoped token is not an identity there: it is treated as anonymous.
+func (a *API) optionalCaller(r *http.Request) (store.Token, bool) {
+	tk, ok := a.resolveCaller(r)
+	if !ok || tk.Scope != "" {
+		return store.Token{}, false
+	}
+	return tk, true
 }
 
 // noTombstones makes owners whose login contains "~" (tombstoned ids, see
@@ -295,6 +362,10 @@ func (a *API) versions(w http.ResponseWriter, r *http.Request) {
 		// version, whose history is kept but not shown.
 		Downloads    int64 `json:"downloads"`
 		Downloads30d int64 `json:"downloads30d"`
+		// PublishedVia is recorded provenance from the CI token that
+		// published the version (repository, workflow ref, commit); absent
+		// for every other version. It is not a verified-publisher mark.
+		PublishedVia map[string]string `json:"publishedVia,omitempty"`
 	}
 	dl, err := a.store.VersionDownloads(r.PathValue("owner"), r.PathValue("name"))
 	if err != nil {
@@ -307,7 +378,7 @@ func (a *API) versions(w http.ResponseWriter, r *http.Request) {
 		if v.Removed {
 			m = manifest.Manifest{}
 		}
-		out = append(out, item{v.Version, v.Digest, v.Yanked, m, m.EnforcedSummary(), v.CreatedAt, v.Removed, v.RemovedReason, dl[v.Version].Total, dl[v.Version].Last30d})
+		out = append(out, item{v.Version, v.Digest, v.Yanked, m, m.EnforcedSummary(), v.CreatedAt, v.Removed, v.RemovedReason, dl[v.Version].Total, dl[v.Version].Last30d, publishedVia(v.PublishedVia)})
 	}
 	writeJSON(w, 200, out)
 }
@@ -347,6 +418,9 @@ func (a *API) metadata(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out["downloads"], out["downloads30d"] = dl[pick.Version].Total, dl[pick.Version].Last30d
+	if pv := publishedVia(pick.PublishedVia); pv != nil {
+		out["publishedVia"] = pv
+	}
 	// The README is author-supplied, unverified text. It is only on this
 	// per-version endpoint (never in lists, for size) and omitted when empty.
 	readme, err := a.store.Readme(r.PathValue("owner"), r.PathValue("name"), pick.Version)
@@ -391,11 +465,11 @@ func (a *API) download(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) publish(w http.ResponseWriter, r *http.Request) {
-	id, login, ok := a.authenticate(r)
+	tk, ok := a.caller(w, r)
 	if !ok {
-		writeErr(w, 401, "authentication required")
 		return
 	}
+	id, login := tk.UserID, tk.Login
 	owner, name, version := r.PathValue("owner"), r.PathValue("name"), r.PathValue("version")
 	if !strings.EqualFold(owner, login) {
 		writeErr(w, 403, "you can only publish under your own login")
@@ -418,7 +492,7 @@ func (a *API) publish(w http.ResponseWriter, r *http.Request) {
 	// A publish rejected by a quota still counts against the hourly allowance
 	// (Allow above already recorded it). Refunding it would let a user parked
 	// at their limit upload and have unpacked 5 MiB bodies without bound.
-	err = a.store.Publish(id, login, name, version, body)
+	err = a.store.PublishVia(id, login, name, version, body, viaRecord(tk))
 	var qe *store.QuotaError
 	switch {
 	case err == nil:
@@ -440,11 +514,11 @@ func (a *API) publish(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) yank(yanked bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, login, ok := a.authenticate(r)
+		tk, ok := a.caller(w, r)
 		if !ok {
-			writeErr(w, 401, "authentication required")
 			return
 		}
+		id, login := tk.UserID, tk.Login
 		if !strings.EqualFold(r.PathValue("owner"), login) {
 			writeErr(w, 403, "only the owner can yank or un-yank versions")
 			return
@@ -460,6 +534,47 @@ func (a *API) yank(yanked bool) http.HandlerFunc {
 			internal(w, err)
 		}
 	}
+}
+
+// viaRecord is the compact JSON provenance stored with a version published by
+// a CI token ("" for any other token): only these claims, only strings,
+// taken from the claims recorded when the token was minted from a verified ID
+// token. It is recorded provenance, not an endorsement.
+func viaRecord(tk store.Token) string {
+	if tk.Scope != ScopePublish || tk.Claims == "" {
+		return ""
+	}
+	var claims map[string]string
+	if json.Unmarshal([]byte(tk.Claims), &claims) != nil {
+		return ""
+	}
+	rec := map[string]string{}
+	for _, k := range []string{"repository", "repository_id", "workflow_ref", "sha", "run_id"} {
+		if v := claims[k]; v != "" {
+			rec[k] = v
+		}
+	}
+	if len(rec) == 0 {
+		return ""
+	}
+	b, err := json.Marshal(rec)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// publishedVia renders a stored provenance record for the API, or nil when
+// the version was not published with a CI token.
+func publishedVia(raw string) map[string]string {
+	if raw == "" {
+		return nil
+	}
+	var rec map[string]string
+	if json.Unmarshal([]byte(raw), &rec) != nil {
+		return nil
+	}
+	return map[string]string{"repository": rec["repository"], "workflowRef": rec["workflow_ref"], "sha": rec["sha"]}
 }
 
 // resolve picks a version: range=latest (the default) is the highest semver

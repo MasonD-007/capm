@@ -22,6 +22,14 @@ func logout(args []string, stdout, stderr io.Writer, e env) int {
 		fmt.Fprintln(stderr, "usage: capm logout")
 		return 2
 	}
+	if e.envToken() != "" {
+		// CAPM_TOKEN is the credential for this run, not a login this machine
+		// holds: nothing to delete, and revoking someone's CI token as a side
+		// effect of a cleanup step would surprise them. The stored login (a
+		// different identity) is left alone too. Exit 0 so cleanup steps pass.
+		fmt.Fprintln(stderr, "capm logout: CAPM_TOKEN is set, so nothing was revoked and the stored login (if any) was left alone; unset CAPM_TOKEN to log out of it")
+		return 0
+	}
 	creds, err := loadCreds(e)
 	if err != nil {
 		if errors.Is(err, errNotLoggedIn) {
@@ -132,7 +140,9 @@ func revokeByID(id int64, list []client.TokenInfo, c *client.Client, stdout, std
 		return tokensFail(stderr, err)
 	}
 	fmt.Fprintf(stdout, "Revoked token %d\n", id)
-	if target.Current {
+	if target.Current && e.envToken() != "" {
+		fmt.Fprintln(stdout, "That was the token in CAPM_TOKEN; it no longer works. The stored login was left alone.")
+	} else if target.Current {
 		if err := deleteCreds(e); err != nil {
 			fmt.Fprintf(stderr, "capm tokens: could not delete the stored credentials: %v\n", err)
 			return 1

@@ -22,7 +22,12 @@ type Token struct {
 	Login      string
 	ExpiresAt  time.Time // zero = never expires
 	LastUsedAt time.Time // zero = never used
-	hash       []byte
+	// Scope is "" for a full token, "publish" for a token that may only
+	// publish (see auth). Claims is the JSON of the OIDC claims recorded for a
+	// CI token, "" otherwise.
+	Scope  string
+	Claims string
+	hash   []byte
 }
 
 // TokenInfo describes one of a user's tokens. It deliberately carries no hash.
@@ -33,6 +38,7 @@ type TokenInfo struct {
 	LastUsedAt time.Time // zero = never used
 	ExpiresAt  time.Time // zero = never expires
 	Current    bool
+	Scope      string // "" = full token
 }
 
 func unixOrZero(n sql.NullInt64) time.Time {
@@ -49,14 +55,27 @@ func unixOrZero(n sql.NullInt64) time.Time {
 // concurrent calls cannot read the same MAX(id); the UNIQUE index is a
 // backstop.
 func (s *Store) CreateToken(hash []byte, userID int64, name string, expiresAt time.Time) error {
+	return s.CreateScopedToken(hash, userID, name, expiresAt, "", "")
+}
+
+// CreateScopedToken is CreateToken for a token with a scope ("" = full) and
+// the JSON of the claims it was issued for.
+func (s *Store) CreateScopedToken(hash []byte, userID int64, name string, expiresAt time.Time, scope, claims string) error {
 	var exp any
 	if !expiresAt.IsZero() {
 		exp = expiresAt.Unix()
 	}
-	_, err := s.db.Exec(`INSERT INTO tokens(hash, user_id, created_at, name, expires_at, id)
-		VALUES(?, ?, ?, ?, ?, (SELECT COALESCE(MAX(id), 0) + 1 FROM tokens))`,
-		hash, userID, s.now().Unix(), name, exp)
+	_, err := s.db.Exec(`INSERT INTO tokens(hash, user_id, created_at, name, expires_at, scope, claims, id)
+		VALUES(?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(id), 0) + 1 FROM tokens))`,
+		hash, userID, s.now().Unix(), name, exp, scope, claims)
 	return err
+}
+
+// CountLiveTokens is how many usable (not revoked, not expired) tokens of the
+// given scope userID has.
+func (s *Store) CountLiveTokens(userID int64, scope string) (int64, error) {
+	return count(s.db, `SELECT count(*) FROM tokens WHERE user_id = ? AND scope = ? AND revoked_at IS NULL
+		AND (expires_at IS NULL OR expires_at > ?)`, userID, scope, s.now().Unix())
 }
 
 // repairTokenIDs gives an id to token rows that lack one. Only the previous
@@ -84,10 +103,10 @@ func (s *Store) LookupToken(hash []byte) (Token, error) {
 		stored  []byte
 		exp, lu sql.NullInt64
 	)
-	err := s.db.QueryRow(`SELECT u.id, u.login, t.hash, COALESCE(t.id, 0), t.expires_at, t.last_used_at
+	err := s.db.QueryRow(`SELECT u.id, u.login, t.hash, COALESCE(t.id, 0), t.expires_at, t.last_used_at, t.scope, t.claims
 		FROM tokens t JOIN users u ON u.id = t.user_id
 		WHERE t.hash = ? AND t.revoked_at IS NULL AND (t.expires_at IS NULL OR t.expires_at > ?)`,
-		hash, s.now().Unix()).Scan(&tk.UserID, &tk.Login, &stored, &tk.ID, &exp, &lu)
+		hash, s.now().Unix()).Scan(&tk.UserID, &tk.Login, &stored, &tk.ID, &exp, &lu, &tk.Scope, &tk.Claims)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Token{}, ErrNotFound
 	}
@@ -128,7 +147,7 @@ func (s *Store) TouchToken(tk Token) {
 // ListTokens returns userID's usable (not revoked, not expired) tokens,
 // oldest first. currentHash marks the caller's own token.
 func (s *Store) ListTokens(userID int64, currentHash []byte) ([]TokenInfo, error) {
-	rows, err := s.db.Query(`SELECT id, name, created_at, last_used_at, expires_at, hash
+	rows, err := s.db.Query(`SELECT id, name, created_at, last_used_at, expires_at, hash, scope
 		FROM tokens WHERE user_id = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)
 		ORDER BY id`, userID, s.now().Unix())
 	if err != nil {
@@ -143,7 +162,7 @@ func (s *Store) ListTokens(userID int64, currentHash []byte) ([]TokenInfo, error
 			lu, exp sql.NullInt64
 			h       []byte
 		)
-		if err := rows.Scan(&ti.ID, &ti.Name, &created, &lu, &exp, &h); err != nil {
+		if err := rows.Scan(&ti.ID, &ti.Name, &created, &lu, &exp, &h, &ti.Scope); err != nil {
 			return nil, err
 		}
 		ti.CreatedAt = time.Unix(created, 0).UTC()

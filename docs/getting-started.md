@@ -108,6 +108,11 @@ account.
 2. Tick **Enable Device Flow** and save.
 3. Copy the **Client ID**. No client secret is needed.
 
+The device flow normally requests no OAuth scope. Only `capm login --orgs`
+asks for `read:org` (to read the user's organisation memberships once, at
+login; the GitHub access token is discarded straight afterwards, never stored
+or logged). Nothing needs changing in the OAuth app for that.
+
 ## Run the registry
 
 Copy `backend/.env.example` to `backend/.env` and set at least
@@ -292,10 +297,12 @@ jobs:
 Things to know:
 
 - The bundle is published as `<owner>/<name>` where the owner is the GitHub
-  **user** who owns the repository, and `name` and `version` come from
-  `capm.yaml`. Bump `metadata.version` for each release; a version that exists
-  is refused. **Organisation-owned repositories are refused** ("organisation
-  namespaces are not supported yet").
+  account (user or **organisation**) that owns the repository, and `name` and
+  `version` come from `capm.yaml`. Bump `metadata.version` for each release; a
+  version that exists is refused. For an organisation-owned repository the
+  token can publish under the whole organisation's namespace, so read
+  [Publish to an organisation](#publish-to-an-organisation) and the security
+  notes first.
 - Workflows triggered by `pull_request` or `pull_request_target` (and the other
   `pull_request_*` events) cannot publish: the registry refuses their tokens.
   Use `push`, `release`, `workflow_dispatch` or `schedule`.
@@ -312,6 +319,74 @@ Things to know:
   prints only the token on stdout and stores nothing.
 - Your CI tokens show up in `capm tokens` as `ci:<repository>` with a 15 minute
   expiry; `capm tokens revoke <id>` ends one early.
+
+### Link your repository (`metadata.repository`)
+
+A manifest may name where its source lives:
+
+```yaml
+metadata:
+  name: my-agent
+  version: 0.1.0
+  repository: https://github.com/<owner>/<repo>   # exactly this shape
+```
+
+It must be exactly `https://github.com/<owner>/<repo>`: https, host
+`github.com`, two path segments, no trailing slash, no `.git`, no query or
+fragment (`capm lint`, `capm push` and the registry all refuse anything else).
+`capm init --repository URL` writes it (and asks last, in the interactive
+questions).
+
+The registry marks a version **verified** only when it was published from a
+GitHub Actions workflow (the OIDC publish above) of that same repository: the
+workflow's certified repository must equal the manifest's, compared as
+owner/repo without regard to case. A version you publish with `capm push` from
+your machine is never verified, whatever its manifest says. The website then
+shows "Published from owner/repo by a GitHub Actions workflow" (with the
+workflow file and commit), or "Repository (author's claim, not verified)", and
+`capm inspect` prints the same two states labelled as the registry's
+statement. Verified records where the version was published from. It is not a
+review, and does not mean the bundle's contents match the repository.
+
+### Publish to an organisation
+
+A bundle can live under a GitHub organisation (`acme/agent`) instead of a
+person.
+
+**Interactively.** Sign in with the extra permission once:
+
+```sh
+capm login --orgs      # also asks GitHub for read:org; plain `capm login` asks for nothing extra
+capm orgs              # the organisations you may now publish under, and until when
+capm push --owner acme ./my-bundle      # or CAPM_OWNER=acme capm push ./my-bundle
+```
+
+At the end of `capm login --orgs` the registry asks GitHub which organisations
+you belong to and records the ones you may publish under: organisations you
+**own**, and organisations where you are a member and the organisation's *base
+repository permission* is **write or admin**. A plain member of an
+organisation whose base permission is read or none, or whose base permission
+GitHub does not show to the registry, is **not** recorded. Write access
+granted only through a team does not count in this version. The record lasts
+24 hours; after that publishing and yanking under the organisation are refused
+with a message to run `capm login --orgs` again. Each `--orgs` login replaces
+all your records, so an organisation you have left disappears at your next
+login and, at the latest, 24 hours after you left. If you belong to more than
+1000 organisations the registry says it did not check them all.
+
+Anyone recorded can publish new versions under the organisation and yank or
+un-yank its versions. The version shows who published it (`published by`).
+Quotas, bans and takedowns apply to the organisation as a whole.
+
+**From GitHub Actions.** A workflow in a repository owned by the organisation
+publishes under the organisation exactly as in
+[Publish from GitHub Actions](#publish-from-github-actions); the token it gets
+can publish only under that organisation. Any repository of the organisation
+whose workflows can request an OIDC token can publish any bundle name under
+the organisation, so use an organisation that is dedicated to bundles or limit
+which repositories may run such workflows. There is no human user to record for
+those versions (`published by` is empty); the repository and workflow are in
+`publishedVia`.
 
 ### What capm remembers
 

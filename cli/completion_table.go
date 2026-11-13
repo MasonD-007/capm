@@ -67,22 +67,23 @@ func freeFlag(name string) flagSpec { return flagSpec{Name: name, Value: valFree
 
 // commandTable lists every command in the order of the usage text.
 var commandTable = []cmdSpec{
-	{Name: "login", Desc: "Authenticate with a registry"},
+	{Name: "login", Desc: "Authenticate with a registry", Flags: []flagSpec{boolFlag("orgs"), boolFlag("oidc"), freeFlag("audience")}},
 	{Name: "whoami", Desc: "Print the login you are authenticated as"},
+	{Name: "orgs", Desc: "List the organisations you may publish under"},
 	{Name: "logout", Desc: "Revoke this machine's token and delete the stored credentials"},
 	{Name: "tokens", Desc: "List your login tokens; revoke one by id", Subs: []cmdSpec{
 		{Name: "revoke", Desc: "Revoke a login token", Pos: posTokenID},
 	}},
-	{Name: "usage", Desc: "Show your storage use and the registry's limits"},
+	{Name: "usage", Desc: "Show your storage use and the registry's limits", Flags: []flagSpec{freeFlag("owner")}},
 	{Name: "init", Desc: "Create a commented capm.yaml in a bundle directory", Pos: posDir, Flags: []flagSpec{
 		{Name: "yes", Short: "y"}, freeFlag("name"), freeFlag("description"), freeFlag("author"),
 		{Name: "base", Value: valEnum, Enum: manifest.BaseAgents}, freeFlag("base-version"),
-		freeFlag("egress"), {Name: "mount", Value: valFile}, freeFlag("secret"),
+		freeFlag("egress"), {Name: "mount", Value: valFile}, freeFlag("secret"), freeFlag("repository"),
 	}},
 	{Name: "lint", Desc: "Check a bundle directory for problems before publishing", Pos: posDir,
-		Flags: []flagSpec{boolFlag("strict"), boolFlag("offline")}},
+		Flags: []flagSpec{boolFlag("strict"), boolFlag("offline"), freeFlag("owner")}},
 	{Name: "push", Desc: "Package and publish an agent to a registry", Pos: posDir,
-		Flags: []flagSpec{boolFlag("allow-secret-files")}},
+		Flags: []flagSpec{boolFlag("allow-secret-files"), freeFlag("owner")}},
 	{Name: "pull", Desc: "Download a bundle and check its digest", Pos: posBundle,
 		Flags: []flagSpec{boolFlag("accept-new-owner")}},
 	{Name: "inspect", Desc: "Show a bundle's declared permissions", Pos: posDirOrBundle,

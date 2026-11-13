@@ -100,6 +100,7 @@ func (s *Service) register(handle func(pattern string, h func(http.ResponseWrite
 	handle("POST /v1/auth/token", s.token)
 	handle("POST /v1/auth/oidc", s.oidcExchange)
 	handle("GET /v1/auth/me", s.me)
+	handle("GET /v1/auth/orgs", s.listOrgs)
 	handle("GET /v1/auth/usage", s.usage)
 	handle("GET /v1/auth/tokens", s.listTokens)
 	handle("DELETE /v1/auth/tokens/current", s.revokeCurrent)
@@ -251,7 +252,19 @@ func (s *Service) device(w http.ResponseWriter, r *http.Request) {
 		ExpiresIn       int    `json:"expires_in"`
 		Error           string `json:"error"`
 	}
-	if err := s.postForm("/login/device/code", url.Values{"client_id": {s.cfg.ClientID}}, &gh); err != nil {
+	// `capm login --orgs` sends {"orgs": true}; any other body (an older CLI
+	// sends {} or nothing) means a plain login, which asks GitHub for no scope.
+	var in struct {
+		Orgs bool `json:"orgs"`
+	}
+	if b, err := io.ReadAll(io.LimitReader(r.Body, 1<<16)); err == nil {
+		json.Unmarshal(b, &in) // a body that does not parse is a plain login
+	}
+	form := url.Values{"client_id": {s.cfg.ClientID}}
+	if in.Orgs {
+		form.Set("scope", scopeReadOrg)
+	}
+	if err := s.postForm("/login/device/code", form, &gh); err != nil {
 		log.Printf("auth: device start: %v", err)
 		writeErr(w, http.StatusBadGateway, "could not reach GitHub")
 		return
@@ -261,13 +274,19 @@ func (s *Service) device(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadGateway, "GitHub rejected the device flow request")
 		return
 	}
-	writeJSON(w, 200, map[string]any{
+	out := map[string]any{
 		"device_code":      gh.DeviceCode,
 		"user_code":        gh.UserCode,
 		"verification_uri": gh.VerificationURI,
 		"interval":         gh.Interval,
 		"expires_in":       gh.ExpiresIn,
-	})
+	}
+	if in.Orgs {
+		// Echoed so a CLI can tell a registry that supports --orgs from an
+		// older one that ignored the request.
+		out["scope"] = scopeReadOrg
+	}
+	writeJSON(w, 200, out)
 }
 
 func (s *Service) token(w http.ResponseWriter, r *http.Request) {
@@ -277,6 +296,9 @@ func (s *Service) token(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		DeviceCode string `json:"device_code"`
 		Name       string `json:"name"` // optional; older CLIs send none
+		// Orgs is set by `capm login --orgs`. It only asks for the
+		// organisation check; what is recorded comes from GitHub alone.
+		Orgs bool `json:"orgs"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&in); err != nil || in.DeviceCode == "" {
 		writeErr(w, http.StatusBadRequest, "device_code is required")
@@ -284,6 +306,7 @@ func (s *Service) token(w http.ResponseWriter, r *http.Request) {
 	}
 	var gh struct {
 		AccessToken string `json:"access_token"`
+		Scope       string `json:"scope"`
 		Error       string `json:"error"`
 	}
 	err := s.postForm("/login/oauth/access_token", url.Values{
@@ -355,7 +378,13 @@ func (s *Service) token(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	writeJSON(w, 200, map[string]string{"token": tok})
+	out := map[string]any{"token": tok}
+	if in.Orgs {
+		// The GitHub access token is still in hand here and is dropped when
+		// this handler returns: never stored, never logged.
+		out["orgs"] = s.recordOrgs(gh.AccessToken, gh.Scope, id)
+	}
+	writeJSON(w, 200, out)
 }
 
 // maxTokenName caps a token's name, in characters.
@@ -394,7 +423,23 @@ func (s *Service) usage(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	u, err := s.store.Usage(tk.UserID)
+	// ?owner=<login> shows an organisation's usage to the members who may
+	// publish under it; it goes through the same function as publish and yank.
+	who := tk.UserID
+	if owner := r.URL.Query().Get("owner"); owner != "" {
+		acc, den, err := s.store.AuthorizeOwner(tk, owner, store.ActRead)
+		if err != nil {
+			log.Printf("auth: usage owner: %v", err)
+			writeErr(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		if den != nil {
+			writeErr(w, http.StatusForbidden, "you may only see the usage of your own account or of an organisation you may publish under")
+			return
+		}
+		who = acc.Owner.ID
+	}
+	u, err := s.store.Usage(who)
 	if err != nil {
 		log.Printf("auth: usage: %v", err)
 		writeErr(w, http.StatusInternalServerError, "internal error")

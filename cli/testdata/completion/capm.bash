@@ -44,13 +44,23 @@ _capm() {
   if [ "$cur" = "=" ]; then cur=""; fi
   if [ "$prev" = "=" ] && [ "$COMP_CWORD" -ge 2 ]; then prev="${COMP_WORDS[COMP_CWORD-2]}"; fi
 
-  if [ "$COMP_CWORD" -le 1 ]; then _capm_words "login whoami logout tokens usage init lint push pull inspect run search list report known self-update outdated completion version"; return 0; fi
+  if [ "$COMP_CWORD" -le 1 ]; then _capm_words "login whoami orgs logout tokens usage init lint push pull inspect run search list report known self-update outdated completion version"; return 0; fi
   case "${COMP_WORDS[1]}" in
     login)
+      case "$prev" in
+        --audience|-audience) return 0 ;;
+      esac
+      case "$cur" in
+        -*) _capm_words "--orgs --oidc --audience"; return 0 ;;
+      esac
       # no positional argument is completed
       return 0
       ;;
     whoami)
+      # no positional argument is completed
+      return 0
+      ;;
+    orgs)
       # no positional argument is completed
       return 0
       ;;
@@ -69,6 +79,12 @@ _capm() {
       return 0
       ;;
     usage)
+      case "$prev" in
+        --owner|-owner) return 0 ;;
+      esac
+      case "$cur" in
+        -*) _capm_words "--owner"; return 0 ;;
+      esac
       # no positional argument is completed
       return 0
       ;;
@@ -82,23 +98,30 @@ _capm() {
         --egress|-egress) return 0 ;;
         --mount|-mount) _capm_files -f; return 0 ;;
         --secret|-secret) return 0 ;;
+        --repository|-repository) return 0 ;;
       esac
       case "$cur" in
-        -*) _capm_words "--yes --name --description --author --base --base-version --egress --mount --secret"; return 0 ;;
+        -*) _capm_words "--yes --name --description --author --base --base-version --egress --mount --secret --repository"; return 0 ;;
       esac
       _capm_files -d
       return 0
       ;;
     lint)
+      case "$prev" in
+        --owner|-owner) return 0 ;;
+      esac
       case "$cur" in
-        -*) _capm_words "--strict --offline"; return 0 ;;
+        -*) _capm_words "--strict --offline --owner"; return 0 ;;
       esac
       _capm_files -d
       return 0
       ;;
     push)
+      case "$prev" in
+        --owner|-owner) return 0 ;;
+      esac
       case "$cur" in
-        -*) _capm_words "--allow-secret-files"; return 0 ;;
+        -*) _capm_words "--allow-secret-files --owner"; return 0 ;;
       esac
       _capm_files -d
       return 0

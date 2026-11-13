@@ -5,6 +5,7 @@ import { ApiError, getBundle, getVersionDetail, isRemoved, latestNonYanked, noti
 import type { BundleVersion, RiskLabel } from "@/lib/api";
 import { cliCommands } from "@/lib/commands";
 import { downloadTotals, formatDate, formatDownloads, shortDigest, versionState } from "@/lib/format";
+import { ownerKindLabel, provenanceOf, publishedByLabel } from "@/lib/provenance";
 import { Readme } from "@/lib/readme";
 import { riskDisplay, sortRiskLabels } from "@/lib/risk";
 import { clean } from "@/lib/text";
@@ -64,6 +65,9 @@ async function Detail({ params, searchParams }: Props) {
   const riskLabels = detail?.riskLabels ?? null;
   const readme = detail?.readme ?? "";
   const cmd = removed ? null : cliCommands(owner, name, selected.version);
+  const ownerKind = ownerKindLabel(selected.ownerKind ?? versions[0]?.ownerKind);
+  const provenance = removed ? null : provenanceOf(selected);
+  const publishedBy = removed ? "" : publishedByLabel(selected);
   return (
     <>
       <h1 className="mt-4 break-all font-mono text-3xl font-semibold tracking-tight">
@@ -71,6 +75,14 @@ async function Detail({ params, searchParams }: Props) {
           {clean(owner)}
         </Link>
         /{clean(name)}
+        {ownerKind && (
+          <span
+            className="ml-3 rounded border border-zinc-300 px-2 py-0.5 align-middle font-sans text-sm font-normal text-zinc-600 dark:border-zinc-700 dark:text-zinc-400"
+            title="This namespace belongs to a GitHub organisation"
+          >
+            {ownerKind}
+          </span>
+        )}
       </h1>
 
       <DownloadTotals versions={versions} />
@@ -122,6 +134,8 @@ async function Detail({ params, searchParams }: Props) {
       <p className="mt-3 break-all font-mono text-xs text-zinc-500">
         Version {clean(selected.version)}, digest {clean(selected.digest)}
       </p>
+
+      {(provenance || publishedBy) && <Provenance provenance={provenance} publishedBy={publishedBy} />}
 
       {riskLabels && <RiskLabels labels={riskLabels} />}
 
@@ -407,6 +421,77 @@ function RiskLabels({ labels }: { labels: RiskLabel[] }) {
             );
           })}
         </ul>
+      )}
+    </section>
+  );
+}
+
+// Where this version was published from. "Published from" appears only for a
+// version the registry says came from a GitHub Actions workflow of the very
+// repository the manifest names (lib/provenance.ts re-checks that the two
+// agree); it records the origin, not a review of the bundle. A repository the
+// manifest merely names is shown as the author's claim. The link is built only
+// from a validated github.com/<owner>/<repo> URL.
+function Provenance({
+  provenance,
+  publishedBy,
+}: {
+  provenance: ReturnType<typeof provenanceOf>;
+  publishedBy: string;
+}) {
+  return (
+    <section className="mt-8" aria-labelledby="provenance-heading">
+      <h2 id="provenance-heading" className="sr-only">
+        Where this version was published from
+      </h2>
+      {provenance?.kind === "verified" && (
+        <>
+          <p>
+            Published from{" "}
+            <a
+              href={provenance.url}
+              rel="noopener noreferrer nofollow"
+              className="font-mono underline underline-offset-2"
+            >
+              {provenance.repo}
+            </a>{" "}
+            by a GitHub Actions workflow
+            {provenance.workflowRef && (
+              <>
+                {" "}
+                (<span className="font-mono text-sm break-all">{provenance.workflowRef}</span>
+                {provenance.commit && (
+                  <>
+                    , commit <span className="font-mono text-sm">{provenance.commit}</span>
+                  </>
+                )}
+                )
+              </>
+            )}
+            .
+          </p>
+          <p className="mt-1 text-xs text-zinc-500">
+            This records where the version was published from, as stated by the registry. It is not a
+            review of the bundle.
+          </p>
+        </>
+      )}
+      {provenance?.kind === "claim" && (
+        <p>
+          Repository (author&apos;s claim, not verified):{" "}
+          <a
+            href={provenance.url}
+            rel="noopener noreferrer nofollow"
+            className="font-mono underline underline-offset-2"
+          >
+            {provenance.repo}
+          </a>
+        </p>
+      )}
+      {publishedBy && (
+        <p className="mt-1 text-sm text-zinc-700 dark:text-zinc-300">
+          Published by <span className="font-mono">{publishedBy}</span> (a member of this organisation).
+        </p>
       )}
     </section>
   );

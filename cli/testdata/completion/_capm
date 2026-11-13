@@ -29,6 +29,7 @@ _capm() {
     cmds=(
       'login:Authenticate with a registry'
       'whoami:Print the login you are authenticated as'
+      'orgs:List the organisations you may publish under'
       'logout:Revoke this machine'\''s token and delete the stored credentials'
       'tokens:List your login tokens; revoke one by id'
       'usage:Show your storage use and the registry'\''s limits'
@@ -52,10 +53,18 @@ _capm() {
   fi
   case ${words[2]} in
     login)
+      case $flag in
+        --audience|-audience) return 0 ;;
+      esac
+      if [[ $PREFIX == -* ]]; then vals=(--orgs --oidc --audience); compadd -- $vals; return 0; fi
       # no positional argument is completed
       return 0
       ;;
     whoami)
+      # no positional argument is completed
+      return 0
+      ;;
+    orgs)
       # no positional argument is completed
       return 0
       ;;
@@ -81,6 +90,10 @@ _capm() {
       return 0
       ;;
     usage)
+      case $flag in
+        --owner|-owner) return 0 ;;
+      esac
+      if [[ $PREFIX == -* ]]; then vals=(--owner); compadd -- $vals; return 0; fi
       # no positional argument is completed
       return 0
       ;;
@@ -94,18 +107,25 @@ _capm() {
         --egress|-egress) return 0 ;;
         --mount|-mount) _files; return 0 ;;
         --secret|-secret) return 0 ;;
+        --repository|-repository) return 0 ;;
       esac
-      if [[ $PREFIX == -* ]]; then vals=(--yes --name --description --author --base --base-version --egress --mount --secret); compadd -- $vals; return 0; fi
+      if [[ $PREFIX == -* ]]; then vals=(--yes --name --description --author --base --base-version --egress --mount --secret --repository); compadd -- $vals; return 0; fi
       _files -/
       return 0
       ;;
     lint)
-      if [[ $PREFIX == -* ]]; then vals=(--strict --offline); compadd -- $vals; return 0; fi
+      case $flag in
+        --owner|-owner) return 0 ;;
+      esac
+      if [[ $PREFIX == -* ]]; then vals=(--strict --offline --owner); compadd -- $vals; return 0; fi
       _files -/
       return 0
       ;;
     push)
-      if [[ $PREFIX == -* ]]; then vals=(--allow-secret-files); compadd -- $vals; return 0; fi
+      case $flag in
+        --owner|-owner) return 0 ;;
+      esac
+      if [[ $PREFIX == -* ]]; then vals=(--allow-secret-files --owner); compadd -- $vals; return 0; fi
       _files -/
       return 0
       ;;

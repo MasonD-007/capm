@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"io"
 
@@ -19,8 +20,19 @@ func count(n int64) string { return fmt.Sprint(n) }
 
 // usageCmd prints the caller's storage use and the limits that apply to them.
 func usageCmd(args []string, stdout, stderr io.Writer, e env) int {
-	if len(args) != 0 {
-		fmt.Fprintln(stderr, "usage: capm usage")
+	const use = "usage: capm usage [--owner <org>]"
+	fs := flag.NewFlagSet("usage", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	var owner string
+	fs.StringVar(&owner, "owner", "", "")
+	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
+		fmt.Fprintln(stderr, use)
+		return 2
+	}
+	var ownerSet bool
+	fs.Visit(func(f *flag.Flag) { ownerSet = ownerSet || f.Name == "owner" })
+	if ownerSet && !segRe.MatchString(owner) {
+		fmt.Fprintln(stderr, use)
 		return 2
 	}
 	creds, err := loadCreds(e)
@@ -29,7 +41,7 @@ func usageCmd(args []string, stdout, stderr io.Writer, e env) int {
 		return 1
 	}
 	defer warnExpiry(stderr, e, creds)
-	u, err := client.New(e.registry, creds.Token).Usage()
+	u, err := client.New(e.registry, creds.Token).UsageOf(owner)
 	if err != nil {
 		if client.IsUnsupported(err) {
 			fmt.Fprintln(stderr, "capm usage: this registry does not report usage (it is running an older version)")

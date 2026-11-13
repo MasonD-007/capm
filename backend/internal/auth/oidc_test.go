@@ -100,7 +100,7 @@ func newOIDCEnvCfg(t *testing.T, ttl time.Duration, apiCfg api.Config) *oidcEnv 
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	svc := auth.New(st, auth.Config{ClientID: "cid", APIURL: e.apiSrv.URL, OAuthURL: e.apiSrv.URL, TokenTTL: ttl,
+	svc := auth.New(st, auth.Config{ClientID: "cid", APIURL: e.apiSrv.URL, OAuthURL: e.apiSrv.URL, TokenTTL: ttl, AdminIDs: []int64{42},
 		OIDC: &auth.OIDCConfig{Issuer: oidcIssuer, JWKSURL: e.jwks.URL + "/.well-known/jwks", Audience: oidcAudience}})
 	apiCfg.IsAdmin, apiCfg.AuthDetail = svc.IsAdmin, svc.AuthenticateDetail
 	reg := api.NewWithConfig(st, svc.Authenticate, apiCfg)
@@ -332,7 +332,6 @@ func TestOIDCRefusals(t *testing.T) {
 		{"pull_request", jws(good, pushClaims(pullRequestClaims("pull_request")), e.key), 403, "pull request"},
 		{"pull_request_target", jws(good, pushClaims(pullRequestClaims("pull_request_target")), e.key), 403, "pull request"},
 		{"pull_request_review", jws(good, pushClaims(map[string]any{"event_name": "pull_request_review"}), e.key), 403, "pull request"},
-		{"org owner", jws(good, pushClaims(map[string]any{"repository_owner_id": "77", "repository_owner": "acme", "repository": "acme/x"}), e.key), 403, "organisation namespaces are not supported yet"},
 		{"unknown owner id", jws(good, pushClaims(map[string]any{"repository_owner_id": "999"}), e.key), 503, "GitHub"},
 		{"malformed base64", "!!!!." + parts[1] + "." + parts[2], 401, "signature"},
 		{"extra dots", e.jwt(t, nil) + ".x", 401, "signature"},
@@ -360,14 +359,6 @@ func TestOIDCRefusals(t *testing.T) {
 	}
 	if n, _ := e.st.ListTokens(42, nil); len(n) != 0 {
 		t.Fatalf("tokens created by refused exchanges: %+v", n)
-	}
-}
-
-func TestOIDCOrgOwnerMessageIsExact(t *testing.T) {
-	e := newOIDCEnv(t, 0)
-	code, out, _ := e.exchange(t, e.jwt(t, map[string]any{"repository_owner_id": "77", "repository_owner": "acme", "repository": "acme/x"}))
-	if code != 403 || errOf(out) != "organisation namespaces are not supported yet" {
-		t.Fatalf("%d %v", code, out)
 	}
 }
 

@@ -31,6 +31,7 @@ complete -c capm -f
 
 complete -c capm -n 'test (__capm_argc) -eq 1' -a 'login' -d 'Authenticate with a registry'
 complete -c capm -n 'test (__capm_argc) -eq 1' -a 'whoami' -d 'Print the login you are authenticated as'
+complete -c capm -n 'test (__capm_argc) -eq 1' -a 'orgs' -d 'List the organisations you may publish under'
 complete -c capm -n 'test (__capm_argc) -eq 1' -a 'logout' -d 'Revoke this machine\'s token and delete the stored credentials'
 complete -c capm -n 'test (__capm_argc) -eq 1' -a 'tokens' -d 'List your login tokens; revoke one by id'
 complete -c capm -n 'test (__capm_argc) -eq 1' -a 'usage' -d 'Show your storage use and the registry\'s limits'
@@ -50,8 +51,13 @@ complete -c capm -n 'test (__capm_argc) -eq 1' -a 'completion' -d 'Print a shell
 complete -c capm -n 'test (__capm_argc) -eq 1' -a 'version' -d 'Print the capm version'
 
 # capm login
+complete -c capm -n '__capm_at login' -l orgs
+complete -c capm -n '__capm_at login' -l oidc
+complete -c capm -n '__capm_at login' -l audience -x
 
 # capm whoami
+
+# capm orgs
 
 # capm logout
 
@@ -60,6 +66,7 @@ complete -c capm -n '__capm_at tokens; and test (__capm_argc) -eq 2' -a 'revoke'
 # capm tokens revoke
 
 # capm usage
+complete -c capm -n '__capm_at usage' -l owner -x
 
 # capm init
 complete -c capm -n '__capm_at init' -l yes -s y
@@ -71,15 +78,18 @@ complete -c capm -n '__capm_at init' -l base-version -x
 complete -c capm -n '__capm_at init' -l egress -x
 complete -c capm -n '__capm_at init' -l mount -r -F
 complete -c capm -n '__capm_at init' -l secret -x
+complete -c capm -n '__capm_at init' -l repository -x
 complete -c capm -n '__capm_at init' -a '(__fish_complete_directories)'
 
 # capm lint
 complete -c capm -n '__capm_at lint' -l strict
 complete -c capm -n '__capm_at lint' -l offline
+complete -c capm -n '__capm_at lint' -l owner -x
 complete -c capm -n '__capm_at lint' -a '(__fish_complete_directories)'
 
 # capm push
 complete -c capm -n '__capm_at push' -l allow-secret-files
+complete -c capm -n '__capm_at push' -l owner -x
 complete -c capm -n '__capm_at push' -a '(__fish_complete_directories)'
 
 # capm pull

@@ -86,6 +86,9 @@ func inspectRemote(owner, name, spec string, diff bool, oldVersion string, stdou
 	ks := newKnownStore(e, stderr)
 	rec, recorded := ks.get(e.registry, owner, name)
 	fmt.Fprintln(stderr, describePin(pinStatus(rec, recorded, res.OwnerID), rec, recorded))
+	for _, l := range describeProvenance(m, md) {
+		fmt.Fprintln(stderr, l)
+	}
 	if diff {
 		return inspectDiff(c, ks, e, owner, name, res, md, oldVersion, stdout, stderr)
 	}
@@ -111,4 +114,38 @@ func fetchToTemp(e env, owner, name, spec, root, pattern string) (*manifest.Mani
 		return nil, tmp, res, fmt.Errorf("invalid bundle: %w", err)
 	}
 	return m, tmp, res, nil
+}
+
+// describeProvenance is what `capm inspect` says about where a registry
+// version was published from. The CLI cannot check any of it: it prints the
+// registry's statement and labels it as such. A "published from" line appears
+// only when the registry says the version is verified AND its own provenance
+// record names the same repository as the manifest's (validated) claim;
+// anything less is shown as the author's unverified claim. Nothing here says
+// the bundle's contents match the repository or are safe.
+func describeProvenance(m *manifest.Manifest, md client.Metadata) []string {
+	var out []string
+	claim := m.Metadata.Repository
+	via := md.PublishedVia
+	if md.RepositoryVerified && claim != "" && manifest.RepositoryMatches(claim, via["repository"]) {
+		sha := via["sha"]
+		if len(sha) > 7 {
+			sha = sha[:7]
+		}
+		detail := ""
+		switch {
+		case via["workflowRef"] != "" && sha != "":
+			detail = fmt.Sprintf(" (%s, commit %s)", client.Sanitize(via["workflowRef"]), client.Sanitize(sha))
+		case sha != "":
+			detail = fmt.Sprintf(" (commit %s)", client.Sanitize(sha))
+		}
+		out = append(out, fmt.Sprintf("registry says: published from %s by a GitHub Actions workflow%s; capm has not checked this, and it says nothing about the bundle's contents",
+			client.Sanitize(via["repository"]), detail))
+	} else if claim != "" {
+		out = append(out, "repository (author's claim, not verified): "+client.Sanitize(claim))
+	}
+	if md.PublishedBy != "" {
+		out = append(out, fmt.Sprintf("published by %s (the registry's statement)", client.Sanitize(md.PublishedBy)))
+	}
+	return out
 }

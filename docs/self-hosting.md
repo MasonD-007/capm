@@ -576,13 +576,40 @@ kubectl -n capm logs -f job/backup-pre-migrate     # wait for it to finish
 kubectl -n capm delete job backup-pre-migrate      # afterwards
 ```
 
-**This release (schema version 8) migrates again, for publishing from CI (step
+**This release (schema version 9) migrates for organisation namespaces and
+verified repository links (step 9).** It runs, in one transaction:
+
+```sql
+ALTER TABLE users ADD COLUMN kind TEXT NOT NULL DEFAULT 'user' CHECK (kind IN ('user', 'org'));
+CREATE TABLE org_members (
+	org_id     INTEGER NOT NULL,
+	user_id    INTEGER NOT NULL,
+	role       TEXT NOT NULL,
+	checked_at INTEGER NOT NULL,
+	PRIMARY KEY(org_id, user_id)
+);
+CREATE INDEX org_members_user ON org_members(user_id);
+ALTER TABLE versions ADD COLUMN published_by INTEGER;
+ALTER TABLE versions ADD COLUMN repo_verified INTEGER NOT NULL DEFAULT 0;
+```
+
+Every existing account stays a `user`, every existing version is unverified with
+no recorded publisher. No row is rewritten and nothing is rebuilt. **Take the
+backup above first (the pre-migration snapshot for step 9).** A release older
+than 9 refuses to start on a version-9 database, so a rollback needs the
+pre-migration snapshot; organisation accounts, membership records and
+provenance recorded since the deploy are lost with it. The new OAuth scope
+(`read:org`) is requested only by `capm login --orgs`; no change to the OAuth
+app or the ConfigMap is needed, and the access token GitHub returns is used for
+that one login request and discarded. See
+[Organisation namespaces](security-notes.md#organisation-namespaces).
+
+**Schema version 8 migrated for publishing from CI (step
 8).** It adds three columns, all `TEXT NOT NULL DEFAULT ''` and each a plain
 `ALTER TABLE ... ADD COLUMN`: `tokens.scope` (empty = a full token, what every
 existing token is), `tokens.claims` and `versions.published_via` (empty = no CI
 provenance). No row is rewritten and no table is rebuilt, so the step is quick.
-**Take the backup above first (this is the pre-migration snapshot for step
-8).** A release older than 8 refuses to start on a version-8 database ("newer
+**Take the backup above first (if steps 8 and 9 deploy together, the one backup covers both).** A release older than 8 refuses to start on a version-8 database ("newer
 than this server supports"), so a rollback needs the pre-migration snapshot;
 CI tokens and CI provenance created since the deploy are lost with it. See
 [Publish from CI](#publish-from-ci-oidc).

@@ -33,6 +33,11 @@ type Metadata struct {
 	Version     string   `yaml:"version" json:"version"`
 	Description string   `yaml:"description,omitempty" json:"description,omitempty"`
 	Authors     []string `yaml:"authors,omitempty" json:"authors,omitempty"`
+	// Repository is an optional https://github.com/<owner>/<repo> URL: the
+	// author's claim about where the bundle's source lives. The registry only
+	// marks it verified for a version published from a GitHub Actions
+	// workflow of that repository (see RepositoryMatches).
+	Repository string `yaml:"repository,omitempty" json:"repository,omitempty"`
 }
 
 // Base names the agent runtime: "claude-code" or "opencode".

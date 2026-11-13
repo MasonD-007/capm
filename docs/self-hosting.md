@@ -458,6 +458,86 @@ pull, and are only blocked from publishing more bytes. Re-publishing bytes the
 user already stores adds nothing. A restore of a removed version is not
 quota-checked.
 
+## Reports
+
+Anyone can report a bundle, from the bundle page ("Report this bundle"), with
+`capm report <owner/name[@version]> --reason malware|secrets-exposed|impersonation|other
+[--details TEXT]`, or `POST /v1/bundles/{owner}/{name}/report`. No account is
+needed. A report removes nothing by itself.
+
+**Where reports go.** They are stored in the `reports` table (migration 7). With
+`REPORT_WEBHOOK_URL` unset, which is how this is deployed, nothing notifies
+you: look yourself.
+
+```sh
+capm admin reports              # open reports, newest first
+capm admin reports --all        # or --resolved
+capm admin report 12            # one report in full
+capm admin resolve 12 --note "removed alice/x@1.0.0"
+```
+
+Each row shows the bundle's current state next to the report (`live`,
+`removed`, `owner-banned`), so you can see what is already handled. Taking a
+bundle down (`capm admin remove`, `ban`) does not resolve its reports; resolve
+them yourself, which is audited (`capm admin log`). The text of a report is
+written by a stranger: the CLI strips control and bidi characters, but treat it
+as untrusted input.
+
+**Limits.** 5 reports per client IP per hour (`REPORT_RATE_PER_HOUR`; `0`
+switches reporting off, and the route answers 404). The client IP uses the same
+`TRUSTED_PROXY` / `CLIENT_IP_HEADER` logic as the login limiter, so read
+[Client IP header](#client-ip-header). At most 200 open reports per bundle and
+5000 in all; beyond that new reports are accepted and dropped (the reporter
+sees the usual success) and the backend logs `WARN: reports: open-report cap
+reached`. Resolving reports frees room. An identical open report (same bundle,
+version, reason and reporter) within 24 hours is not stored again.
+
+**The website form and the visitor IP.** The form calls the registry from the
+frontend server, so the backend would see the frontend pod. The frontend
+forwards the visitor's address taken from `CF-Connecting-IP` (set by Cloudflare;
+override the name with `CLIENT_IP_HEADER` on the frontend) as the only
+`X-Forwarded-For` entry. That only works if Cloudflare's header reaches the
+frontend pod through the tunnel and Traefik, and if the backend has
+`TRUSTED_PROXY=true` (it does). Verify with the same throwaway `whoami` check as
+in [Client IP header](#client-ip-header), on the frontend path. If the header
+is absent, the form falls back to sending nothing, and every website report
+shares one bucket (5 an hour for the whole site; CLI and API callers are
+limited separately per address).
+
+**Turning the webhook on later (not applied; nothing here exists in the
+cluster).** The URL is a credential, so keep it in a SealedSecret, the same way
+as the backup secret above:
+
+```sh
+kubectl create secret generic report-webhook -n capm --dry-run=client -o yaml \
+  --from-literal=REPORT_WEBHOOK_URL='https://hooks.example.com/<secret path>' \
+| kubeseal --controller-namespace kube-system \
+    --controller-name sealed-secrets-controller -o yaml > k3s/apps/backend/report-webhook-sealed-secret.yaml
+```
+
+Commit the sealed file, then reference it from the backend Deployment
+(`k3s/apps/backend/deployment.yaml`) next to the existing `envFrom`:
+
+```yaml
+          envFrom:
+            - configMapRef:
+                name: backend-config
+            - secretRef:           # NOT APPLIED: add only when enabling the webhook
+                name: report-webhook
+```
+
+Optionally add `PUBLIC_URL: "https://capm.masondrake.dev"` to the backend
+ConfigMap so messages link to the bundle page. The backend POSTs JSON
+`{"text", "bundle", "version", "reason", "reportId", "details", "url"}` for each
+newly stored report (never for a duplicate or a dropped one): asynchronous, 5
+second timeout, no retries, a full queue (32) drops with a WARN, and a failing
+receiver never affects the reporter. `text` is one line built from the reason
+and bundle only; the reporter's free text is only in `details`, truncated to 200
+characters, so a chat relay that interprets `text` cannot be injected through
+it. The URL is never logged, only its host. An `http://` or `https://` value is
+required or the backend refuses to start. After changing it, restart the
+backend.
+
 ## Before deploying a release that migrates the database
 
 The backend applies schema migrations when it starts, so a merge to `main` that
@@ -471,8 +551,16 @@ kubectl -n capm logs -f job/backup-pre-migrate     # wait for it to finish
 kubectl -n capm delete job backup-pre-migrate      # afterwards
 ```
 
-**This release (schema version 6) migrates again, for download counts (step
-6).** It adds one table, `downloads(owner_id, name, version, day, count)`
+**This release (schema version 7) migrates again, for abuse reports (step
+7).** It adds one table, `reports`, and two indexes on it (`reports_open`, a
+partial index over unresolved reports, newest first; `reports_dedup` over
+owner, name, reporter key and time). No existing table changes, so the step is
+quick and cannot alter data. **Take the backup above first.** A release older
+than 7 refuses to start on a version-7 database ("newer than this server
+supports"), so a rollback needs the pre-migration snapshot; reports filed since
+the deploy are lost with it. See [Reports](#reports).
+
+**Schema version 6 migrated for download counts (step 6).** It adds one table, `downloads(owner_id, name, version, day, count)`
 (`day` is days since the Unix epoch, UTC) and an index on `day`; no existing
 table changes. Counts start at zero. At every start the backend also rolls
 daily rows older than 400 days into one row per version with `day = 0`, so

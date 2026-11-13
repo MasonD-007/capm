@@ -222,7 +222,7 @@ hint_case() { # hint_case <label> <SHELL value> <expected text> <forbidden text>
   check "$label: installed binary still works" runs_ok "$d/capm"
 }
 not_out_has() { ! grep -q -- "$1" "$WORK/out"; }
-hint_case bash /bin/bash "source <(capm completion bash)" "completion zsh"
+hint_case bash /bin/bash 'eval "$(capm completion bash)"' "completion zsh"
 hint_case zsh /usr/bin/zsh "source <(capm completion zsh)" "completion bash"
 hint_case fish /opt/homebrew/bin/fish "capm completion fish >" "completion zsh"
 hint_case unknown /bin/tcsh "capm completion" "source <("

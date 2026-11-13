@@ -17,7 +17,7 @@ func completion(args []string, stdout, stderr io.Writer, e env) int {
 	}
 	fmt.Fprintf(stderr, "usage: capm completion <%s>\n"+
 		"  Prints a completion script for the shell; for example\n"+
-		"    bash: source <(capm completion bash)\n"+
+		"    bash: eval \"$(capm completion bash)\"\n"+
 		"    zsh:  source <(capm completion zsh)   (after compinit)\n"+
 		"    fish: capm completion fish | source\n",
 		strings.Join(completionShells, "|"))

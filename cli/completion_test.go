@@ -484,6 +484,13 @@ func TestBashScriptRegistersCompletion(t *testing.T) {
 		if err != nil || !strings.Contains(string(out), "-F _capm capm") {
 			t.Errorf("%s: complete -p capm: %q (%v)", bash, out, err)
 		}
+		// The documented one-liner is eval "$(capm completion bash)": bash 3.2
+		// cannot "source <(...)", so the script must also work when eval'd.
+		script, _ := completionScript("bash")
+		out, err = exec.Command(bash, "--norc", "--noprofile", "-c", `eval "$1" && complete -p capm`, "_", script).CombinedOutput()
+		if err != nil || !strings.Contains(string(out), "-F _capm capm") {
+			t.Errorf("%s: eval of the script: %q (%v)", bash, out, err)
+		}
 	}
 }
 

@@ -37,7 +37,7 @@ an error and never sends your login).
 
 ```sh
 # bash (3.2 or newer): add to ~/.bashrc
-source <(capm completion bash)
+eval "$(capm completion bash)"
 
 # zsh: add to ~/.zshrc, after compinit
 source <(capm completion zsh)

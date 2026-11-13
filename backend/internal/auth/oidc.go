@@ -17,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/MasonD-007/capm/backend/internal/oidc"
+	"github.com/MasonD-007/capm/backend/internal/store"
 )
 
 // OIDCConfig enables POST /v1/auth/oidc. A nil *OIDCConfig in Config disables
@@ -127,7 +128,8 @@ func cleanClaim(v string, max int) string {
 }
 
 // oidcExchange trades a GitHub Actions OIDC token for a short-lived, publish-
-// only registry token for the repository owner's account.
+// only registry token for the repository owner's account (a user or an
+// organisation). The token's account is the only namespace it can publish to.
 func (s *Service) oidcExchange(w http.ResponseWriter, r *http.Request) {
 	o := s.oidc
 	if o == nil {
@@ -189,13 +191,17 @@ func (s *Service) oidcExchange(w http.ResponseWriter, r *http.Request) {
 		s.oidcRefuse(w, raw, http.StatusServiceUnavailable, "owner lookup failed", "could not verify the repository owner with GitHub; retry shortly")
 		return
 	}
+	// The token is minted for the repository owner's account: a user, or an
+	// organisation (whose namespace then belongs to every workflow of its
+	// repositories, see docs/security-notes.md). Anything else is refused.
+	var kind string
 	switch info.typ {
 	case "User":
+		kind = store.KindUser
 	case "Organization":
-		s.oidcRefuse(w, raw, http.StatusForbidden, "owner is an organisation", "organisation namespaces are not supported yet")
-		return
+		kind = store.KindOrg
 	default:
-		s.oidcRefuse(w, raw, http.StatusForbidden, "owner is not a user", "the repository owner is not a user account")
+		s.oidcRefuse(w, raw, http.StatusForbidden, "owner is not a user or organisation", "the repository owner is not a user or organisation account")
 		return
 	}
 
@@ -230,9 +236,20 @@ func (s *Service) oidcExchange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Same as device login: the account's current login, renames included.
-	if err := s.store.UpsertUser(ownerID, info.login); err != nil {
-		log.Printf("auth: upsert user: %v", err)
+	// Same as device login: the account's current login, renames included. An
+	// organisation's row is created here from the verified owner id and the
+	// login GitHub reported for it; an id already recorded as the other kind
+	// is refused (account-type confusion), see store.upsertAccount.
+	upsert := s.store.UpsertUser
+	if kind == store.KindOrg {
+		upsert = s.store.UpsertOrg
+	}
+	if err := upsert(ownerID, info.login); err != nil {
+		if errors.Is(err, store.ErrKindChange) {
+			s.oidcRefuse(w, raw, http.StatusForbidden, "account type mismatch", "the repository owner's account type does not match what the registry has recorded for it")
+			return
+		}
+		log.Printf("auth: upsert account: %v", err)
 		s.oidcRefuse(w, raw, http.StatusInternalServerError, "internal", "internal error")
 		return
 	}

@@ -450,3 +450,16 @@ Then, each its own PR:
 6. Is the registry's `ownerId` the GitHub account id for both user and organisation owners? (The CLI check relies on it matching `repository_owner_id`.)
 7. Does the release process want a third-party notices file and a build tag to compile verification out of local dev builds?
 8. Rekor v2 and Fulcio rotations will eventually break stale CLIs; is a fail-closed rule with a self-update hint acceptable, or do you want an opt-in online TUF refresh?
+
+## 8. Owner decisions (Mason, 2026-11-13)
+
+Answers to the six questions put to the owner after this spike. These are binding for the build.
+
+1. **CLI size:** a CLI of roughly 21-24 MB is acceptable. Proceed with `sigstore-go`.
+2. **Where signing happens:** CI only. Publishes from a laptop stay labelled `unsigned` permanently.
+3. **What a signature binds to:** one specific repository, not "any repository the account owns". The verification policy must therefore check the certificate's repository identity (by numeric repository id, pinned on first use alongside the owner id) in addition to the owner and owner id.
+4. **Public transparency log:** signing stays opt-in, because it publishes the repository, commit, workflow path and run link permanently, including for private repositories. The publisher must be told this before the first signature.
+5. **Downgrade rule:** no. An owner who has published a signed version is NOT refused when a later version is unsigned. The CLI may say that an earlier version was signed and this one is not, but it does not block.
+6. **Stale embedded trusted root:** refuse to verify and tell the user to update the CLI (`capm self-update`). No online TUF refresh.
+
+Consequences for the build plan in section 6: step 3 drops the downgrade refusal (decision 5) and adds repository-id pinning (decision 3); step 4's signing is behind an explicit opt-in flag or action input with the privacy notice (decision 4).

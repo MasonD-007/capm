@@ -1,0 +1,15 @@
+--- root: /Volumes/subnet_zero/gitwork/capm/.claude/worktrees/agent-a6f31aa03c40b18a2/spike/signing/trusted_root.json
+ tlogs: ['https://rekor.sigstore.dev', 'https://log2025-1.rekor.sigstore.dev']  cas: 2  ctlogs: 2  tsa: 1
+OK  san=keyless@projectsigstore.iam.gserviceaccount.com
+    issuer=https://accounts.google.com
+    repo=
+--- root: <sigstore-go@v1.4.0>/pkg/testing/data/trusted-roots/public-good.json
+ tlogs: ['https://rekor.sigstore.dev']  cas: 2  ctlogs: 2  tsa: 1
+OK  san=keyless@projectsigstore.iam.gserviceaccount.com
+    issuer=https://accounts.google.com
+    repo=
+--- root: <sigstore-go@v1.4.0>/examples/trusted-root-public-good.json
+ tlogs: ['https://rekor.sigstore.dev']  cas: 2  ctlogs: 2  tsa: 1
+OK  san=keyless@projectsigstore.iam.gserviceaccount.com
+    issuer=https://accounts.google.com
+    repo=

@@ -1,0 +1,77 @@
+######## <scratch>/fix2/cosign-darwin-arm64.sigstore.json
+mediaType: application/vnd.dev.sigstore.bundle.v0.3+json
+notBefore: 2026-10-20 18:00:16 +0000 UTC notAfter: 2026-10-20 18:10:16 +0000 UTC
+messageSignature digestAlg=SHA2_256 digest=9f9b8cd557cf2e5b3df3373a00baa005a86b02391e3e06dd0ce37b3a1533d3a4
+tlog: logIndex=3341261299 integratedTime=2026-10-20 11:00:17 -0700 PDT hasProof=true hasPromise=true
+{
+  "certificateIssuer": "CN=sigstore-intermediate,O=sigstore.dev",
+  "subjectAlternativeName": "keyless@projectsigstore.iam.gserviceaccount.com",
+  "issuer": "https://accounts.google.com"
+}
+######## <sigstore-go@v1.4.0>/examples/bundle-provenance.json
+mediaType: application/vnd.dev.sigstore.bundle+json;version=0.1
+notBefore: 2023-04-18 17:45:11 +0000 UTC notAfter: 2023-04-18 17:55:11 +0000 UTC
+dsse envelope present
+tlog: logIndex=18300934 integratedTime=2023-04-18 10:45:12 -0700 PDT hasProof=false hasPromise=true
+{
+  "certificateIssuer": "CN=sigstore-intermediate,O=sigstore.dev",
+  "subjectAlternativeName": "https://github.com/sigstore/sigstore-js/.github/workflows/release.yml@refs/heads/main",
+  "issuer": "https://token.actions.githubusercontent.com",
+  "githubWorkflowTrigger": "push",
+  "githubWorkflowSHA": "dae8bd8eb433a4147b4655c00fe73e0f22bc0fb1",
+  "githubWorkflowName": "Release",
+  "githubWorkflowRepository": "sigstore/sigstore-js",
+  "githubWorkflowRef": "refs/heads/main",
+  "buildSignerURI": "https://github.com/sigstore/sigstore-js/.github/workflows/release.yml@refs/heads/main",
+  "buildSignerDigest": "dae8bd8eb433a4147b4655c00fe73e0f22bc0fb1",
+  "runnerEnvironment": "github-hosted",
+  "sourceRepositoryURI": "https://github.com/sigstore/sigstore-js",
+  "sourceRepositoryDigest": "dae8bd8eb433a4147b4655c00fe73e0f22bc0fb1",
+  "sourceRepositoryRef": "refs/heads/main",
+  "sourceRepositoryIdentifier": "495574555",
+  "sourceRepositoryOwnerURI": "https://github.com/sigstore",
+  "sourceRepositoryOwnerIdentifier": "71096353",
+  "buildConfigURI": "https://github.com/sigstore/sigstore-js/.github/workflows/release.yml@refs/heads/main",
+  "buildConfigDigest": "dae8bd8eb433a4147b4655c00fe73e0f22bc0fb1",
+  "buildTrigger": "push",
+  "runInvocationURI": "https://github.com/sigstore/sigstore-js/actions/runs/4735384265/attempts/1"
+}
+######## <sigstore-go@v1.4.0>/pkg/testing/data/bundles/othername.sigstore.json
+mediaType: application/vnd.dev.sigstore.bundle.v0.3+json
+notBefore: 2024-07-12 19:06:28 +0000 UTC notAfter: 2024-07-12 19:16:28 +0000 UTC
+messageSignature digestAlg=SHA2_256 digest=bc103b4a84971ef6459b294a2b98568a2bfb72cded09d4acd1e16366a401f95b
+tlog: logIndex=3 integratedTime=2024-07-12 12:06:29 -0700 PDT hasProof=true hasPromise=true
+{
+  "certificateIssuer": "O=Linux Foundation,POSTALCODE=57274,STREET=548 Market St,L=San Francisco,ST=California,C=USA",
+  "subjectAlternativeName": "foo!oidc.local",
+  "issuer": "http://oidc.local:8080"
+}
+######## <sigstore-go@v1.4.0>/pkg/testing/data/bundles/sigstore.js@2.0.0-provenance.sigstore.json
+mediaType: application/vnd.dev.sigstore.bundle+json;version=0.1
+notBefore: 2023-08-18 16:05:35 +0000 UTC notAfter: 2023-08-18 16:15:35 +0000 UTC
+dsse envelope present
+tlog: logIndex=31821305 integratedTime=2023-08-18 09:05:35 -0700 PDT hasProof=true hasPromise=true
+{
+  "certificateIssuer": "CN=sigstore-intermediate,O=sigstore.dev",
+  "subjectAlternativeName": "https://github.com/sigstore/sigstore-js/.github/workflows/release.yml@refs/heads/main",
+  "issuer": "https://token.actions.githubusercontent.com",
+  "githubWorkflowTrigger": "push",
+  "githubWorkflowSHA": "f0b49a04e5a62250e0f60fb128004a73110fe311",
+  "githubWorkflowName": "Release",
+  "githubWorkflowRepository": "sigstore/sigstore-js",
+  "githubWorkflowRef": "refs/heads/main",
+  "buildSignerURI": "https://github.com/sigstore/sigstore-js/.github/workflows/release.yml@refs/heads/main",
+  "buildSignerDigest": "f0b49a04e5a62250e0f60fb128004a73110fe311",
+  "runnerEnvironment": "github-hosted",
+  "sourceRepositoryURI": "https://github.com/sigstore/sigstore-js",
+  "sourceRepositoryDigest": "f0b49a04e5a62250e0f60fb128004a73110fe311",
+  "sourceRepositoryRef": "refs/heads/main",
+  "sourceRepositoryIdentifier": "495574555",
+  "sourceRepositoryOwnerURI": "https://github.com/sigstore",
+  "sourceRepositoryOwnerIdentifier": "71096353",
+  "buildConfigURI": "https://github.com/sigstore/sigstore-js/.github/workflows/release.yml@refs/heads/main",
+  "buildConfigDigest": "f0b49a04e5a62250e0f60fb128004a73110fe311",
+  "buildTrigger": "push",
+  "runInvocationURI": "https://github.com/sigstore/sigstore-js/actions/runs/5904696764/attempts/1",
+  "sourceRepositoryVisibilityAtSigning": "public"
+}

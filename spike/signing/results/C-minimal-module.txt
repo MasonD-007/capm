@@ -1,0 +1,7 @@
+verify-only module: go list -m all =      377; go.mod require lines: 66
+direct requires:
+github.com/sigstore/sigstore-go v1.4.0
+darwin/arm64 ok 17981426
+linux/amd64 ok 18550944
+linux/arm64 ok 17432736
+darwin/amd64 ok 19108080

@@ -60,6 +60,8 @@ type Store struct {
 	now func() time.Time
 	// limits are the default quotas (see accounting.go); set once at startup.
 	limits Limits
+	// reportCapBundle and reportCapGlobal cap open reports (see reports.go).
+	reportCapBundle, reportCapGlobal int
 }
 
 // Open creates dataDir if needed and opens (migrating) the database in it.
@@ -87,7 +89,8 @@ func Open(dataDir string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("store: backfill sizes: %w", err)
 	}
-	s := &Store{db: db, blobsDir: blobs, now: time.Now, limits: DefaultLimits()}
+	s := &Store{db: db, blobsDir: blobs, now: time.Now, limits: DefaultLimits(),
+		reportCapBundle: MaxOpenReportsPerBundle, reportCapGlobal: MaxOpenReports}
 	// Retention is housekeeping: a failure is logged and retried next start,
 	// it never keeps the registry down.
 	if err := s.rollupDownloads(); err != nil {

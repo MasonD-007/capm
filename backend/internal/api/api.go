@@ -24,6 +24,19 @@ type Config struct {
 	// IsAdmin reports whether a GitHub user id may use /v1/admin/. Nil means
 	// nobody may.
 	IsAdmin func(id int64) bool
+	// TrustProxy and ClientIPHeader are TRUSTED_PROXY and CLIENT_IP_HEADER:
+	// the same client-IP derivation the auth limiter uses (see clientIP).
+	TrustProxy     bool
+	ClientIPHeader string
+	// ReportPerHour is reports per client IP per hour (default 5).
+	// ReportsDisabled (REPORT_RATE_PER_HOUR=0) makes the report route a 404.
+	ReportPerHour   int
+	ReportsDisabled bool
+	// Notifier hears about each newly stored report; nil means none.
+	Notifier ReportNotifier
+	// ReportSalt keys reporter hashes; nil means a fresh random salt (tests
+	// only set it).
+	ReportSalt []byte
 }
 
 // AuthFunc identifies the caller of a write request.
@@ -34,6 +47,8 @@ type API struct {
 	authenticate AuthFunc
 	cfg          Config
 	publishLim   *Limiter
+	reportLim    *Limiter
+	reportSalt   []byte
 	// countDownload records one successful download; tests replace it.
 	countDownload func(owner, name, version string) error
 }
@@ -47,8 +62,16 @@ func NewWithConfig(s *store.Store, auth AuthFunc, cfg Config) *API {
 	if cfg.PublishPerHour <= 0 {
 		cfg.PublishPerHour = 30
 	}
-	return &API{store: s, authenticate: auth, cfg: cfg,
-		publishLim: NewLimiter(cfg.PublishPerHour, time.Hour, cfg.Now), countDownload: s.CountDownload}
+	if cfg.ReportPerHour <= 0 {
+		cfg.ReportPerHour = defaultReportPerHour
+	}
+	salt := cfg.ReportSalt
+	if salt == nil {
+		salt = newReportSalt()
+	}
+	return &API{store: s, authenticate: auth, cfg: cfg, reportSalt: salt,
+		publishLim: NewLimiter(cfg.PublishPerHour, time.Hour, cfg.Now), countDownload: s.CountDownload,
+		reportLim: NewLimiter(cfg.ReportPerHour, time.Hour, cfg.Now)}
 }
 
 func (a *API) Handler() http.Handler {
@@ -59,6 +82,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/bundles/{owner}/{name}/{version}/download", a.download)
 	mux.HandleFunc("GET /v1/bundles/{owner}/{name}/resolve", a.resolve)
 	mux.HandleFunc("PUT /v1/bundles/{owner}/{name}/{version}", a.publish)
+	mux.HandleFunc("POST /v1/bundles/{owner}/{name}/report", a.report)
 	mux.HandleFunc("POST /v1/bundles/{owner}/{name}/{version}/yank", a.yank(true))
 	mux.HandleFunc("DELETE /v1/bundles/{owner}/{name}/{version}/yank", a.yank(false))
 	a.mountAdmin(mux)

@@ -24,6 +24,9 @@ Usage:
                                                             show a user's storage use and limits; set per-user limits
                                                             (SIZE like 500MiB or 2GiB; 0 = unlimited; --reset restores the defaults)
   capm admin log                                            show the audit log of admin actions
+  capm admin reports [--all|--resolved]                     list abuse reports (open by default) and what has already been done about each
+  capm admin report  <id>                                   show one report in full
+  capm admin resolve <id> --note TEXT                       mark a report handled (reports are never resolved automatically)
 
 Admins are GitHub numeric ids configured on the registry (ADMIN_GITHUB_IDS).
 Run capm login first.
@@ -76,6 +79,9 @@ func admin(args []string, stdout, stderr io.Writer, e env) int {
 	sub := args[0]
 	if sub == "quota" {
 		return adminQuota(args[1:], stdout, stderr, e)
+	}
+	if sub == "reports" || sub == "report" || sub == "resolve" {
+		return adminReports(sub, args[1:], stdout, stderr, e)
 	}
 	pos, reason, err := adminArgs(args[1:])
 	bad := func(msg string) int {

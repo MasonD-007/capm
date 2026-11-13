@@ -194,7 +194,7 @@ func (c *Client) do(method, path string, body []byte, max int64) ([]byte, error)
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
 	if body != nil {
-		if strings.Contains(path, "/auth/") || strings.Contains(path, "/admin/") {
+		if strings.Contains(path, "/auth/") || strings.Contains(path, "/admin/") || strings.HasSuffix(path, "/report") {
 			req.Header.Set("Content-Type", "application/json")
 		} else {
 			req.Header.Set("Content-Type", "application/gzip")
@@ -528,4 +528,57 @@ func (c *Client) AdminLog(limit int) ([]AdminAction, error) {
 	var out []AdminAction
 	err := c.getJSON("/v1/admin/log?limit="+strconv.Itoa(limit), &out)
 	return out, err
+}
+
+// Report files an abuse report against owner/name (version "" = the whole
+// bundle). The registry answers 202 with an empty object, or an older/other
+// build 201 with an id; id is 0 when none came back. A valid stored token
+// records who reported; with none the report is anonymous.
+func (c *Client) Report(owner, name, version, reason, details string) (id int64, err error) {
+	body, _ := json.Marshal(map[string]string{"version": version, "reason": reason, "details": details})
+	b, err := c.do("POST", "/v1/bundles/"+esc(owner, name)+"/report", body, MaxJSONBytes)
+	if err != nil {
+		return 0, err
+	}
+	var out struct {
+		ID int64 `json:"id"`
+	}
+	json.Unmarshal(b, &out)
+	return out.ID, nil
+}
+
+// ReportInfo is one abuse report as an admin sees it. Every string is
+// attacker-controlled; Details especially.
+type ReportInfo struct {
+	ID               int64      `json:"id"`
+	Owner            string     `json:"owner"`
+	Name             string     `json:"name"`
+	Version          string     `json:"version"`
+	Reason           string     `json:"reason"`
+	Details          string     `json:"details"`
+	ReporterLoggedIn bool       `json:"reporterLoggedIn"`
+	Reporter         string     `json:"reporter"`
+	CreatedAt        time.Time  `json:"createdAt"`
+	ResolvedAt       *time.Time `json:"resolvedAt"`
+	ResolvedBy       string     `json:"resolvedBy"`
+	Resolution       string     `json:"resolution"`
+	// BundleState is "live", "removed" or "owner-banned".
+	BundleState string `json:"bundleState"`
+}
+
+// AdminReports lists reports; state is "open", "resolved" or "all".
+func (c *Client) AdminReports(state string, limit int) ([]ReportInfo, error) {
+	var out []ReportInfo
+	err := c.getJSON("/v1/admin/reports?state="+url.QueryEscape(state)+"&limit="+strconv.Itoa(limit), &out)
+	return out, err
+}
+
+func (c *Client) AdminReport(id int64) (ReportInfo, error) {
+	var out ReportInfo
+	err := c.getJSON("/v1/admin/reports/"+strconv.FormatInt(id, 10), &out)
+	return out, err
+}
+
+func (c *Client) AdminResolveReport(id int64, resolution string) error {
+	return c.adminJSON("POST", "/v1/admin/reports/"+strconv.FormatInt(id, 10)+"/resolve", map[string]string{"resolution": resolution}, nil)
 }

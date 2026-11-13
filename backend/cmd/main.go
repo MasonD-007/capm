@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
@@ -45,6 +46,35 @@ func parseTokenTTLDays(v string) (time.Duration, error) {
 		return 0, fmt.Errorf("TOKEN_TTL_DAYS must be a whole number of days from 0 (never expires) to 36500, got %q", v)
 	}
 	return time.Duration(n) * 24 * time.Hour, nil
+}
+
+// parseReportRate parses REPORT_RATE_PER_HOUR: empty means 5, 0 switches
+// reporting off (the route answers 404), anything else that is not a whole
+// number from 0 to 100000 is an error.
+func parseReportRate(v string) (int, error) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return 5, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 || n > 100000 {
+		return 0, fmt.Errorf("REPORT_RATE_PER_HOUR must be a whole number from 0 (reporting off) to 100000, got %q", v)
+	}
+	return n, nil
+}
+
+// parseHTTPURL validates an optional http(s) URL env var. The error never
+// repeats the value: a webhook URL usually embeds a secret.
+func parseHTTPURL(key, v string) (string, error) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return "", nil
+	}
+	u, err := url.Parse(v)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return "", fmt.Errorf("%s must be an absolute http:// or https:// URL (value not shown)", key)
+	}
+	return v, nil
 }
 
 // parseQuotaLimits reads MAX_USER_BYTES, MAX_USER_BUNDLES, MAX_BUNDLE_VERSIONS
@@ -138,18 +168,49 @@ func main() {
 	if os.Getenv("GITHUB_CLIENT_ID") == "" {
 		log.Print("GITHUB_CLIENT_ID is unset: /v1/auth/* will return 503")
 	}
-	reg := api.NewWithConfig(st, authSvc.Authenticate, api.Config{
-		MaxBundleBytes: int64(envInt("MAX_BUNDLE_BYTES", 5<<20)),
-		PublishPerHour: envInt("PUBLISH_RATE_PER_HOUR", 30),
-		IsAdmin:        authSvc.IsAdmin,
-	})
+	// Reports: parsed here so a bad value refuses to start. The webhook URL is
+	// operator-supplied and may hold a secret, so only its host is logged.
+	reportRate, err := parseReportRate(os.Getenv("REPORT_RATE_PER_HOUR"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	webhookURL, err := parseHTTPURL("REPORT_WEBHOOK_URL", os.Getenv("REPORT_WEBHOOK_URL"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	publicURL, err := parseHTTPURL("PUBLIC_URL", os.Getenv("PUBLIC_URL"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	trustProxy, ipHeader := os.Getenv("TRUSTED_PROXY") == "true", os.Getenv("CLIENT_IP_HEADER")
+	apiCfg := api.Config{
+		MaxBundleBytes:  int64(envInt("MAX_BUNDLE_BYTES", 5<<20)),
+		PublishPerHour:  envInt("PUBLISH_RATE_PER_HOUR", 30),
+		IsAdmin:         authSvc.IsAdmin,
+		TrustProxy:      trustProxy,
+		ClientIPHeader:  ipHeader,
+		ReportPerHour:   reportRate,
+		ReportsDisabled: reportRate == 0,
+	}
+	var hook *api.Webhook
+	switch {
+	case reportRate == 0:
+		log.Print("REPORT_RATE_PER_HOUR=0: reporting is switched off (the report route answers 404)")
+	case webhookURL != "":
+		hook = api.NewWebhook(api.WebhookConfig{URL: webhookURL, PublicURL: publicURL})
+		apiCfg.Notifier = hook
+		log.Printf("report notifications go to webhook host %s", hostOf(webhookURL))
+	default:
+		log.Print("REPORT_WEBHOOK_URL is unset: reports are stored and visible with `capm admin reports` only")
+	}
+	reg := api.NewWithConfig(st, authSvc.Authenticate, apiCfg)
 	// The auth routes proxy to GitHub, so limit them per IP. The limiter wraps
 	// the whole /v1/auth/ handler, so it also covers the authenticated token
 	// routes (me, tokens, revoke); that is fine at CLI volumes.
 	// X-Forwarded-For is only honoured when TRUSTED_PROXY=true; CLIENT_IP_HEADER
 	// (e.g. CF-Connecting-IP) takes precedence when set and valid.
 	authLim := api.NewLimiter(envInt("AUTH_RATE_PER_MINUTE", 30), time.Minute, nil)
-	authH := api.LimitByIP(authLim, os.Getenv("TRUSTED_PROXY") == "true", os.Getenv("CLIENT_IP_HEADER"), authSvc.Handler())
+	authH := api.LimitByIP(authLim, trustProxy, ipHeader, authSvc.Handler())
 
 	mux := http.NewServeMux()
 	mux.Handle("/v1/auth/", authH)
@@ -184,4 +245,16 @@ func main() {
 	if err := srv.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatalf("shutdown: %v", err)
 	}
+	if hook != nil {
+		hook.Close(3 * time.Second) // drain queued notifications briefly, then abandon
+	}
+}
+
+// hostOf is the host of a URL already validated by parseHTTPURL.
+func hostOf(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	return u.Host
 }

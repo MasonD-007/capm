@@ -158,6 +158,15 @@ signal. A registry that predates sorting is noted once on stderr and shown in
 its default order. Output stops at 2000 bundles; narrow it with
 `search`.
 
+To report a bundle that is malicious, exposes secrets or impersonates someone,
+run `capm report owner/name[@version] --reason malware|secrets-exposed|impersonation|other
+[--details TEXT]` (details are required for `other`, at most 2000 characters).
+It works without logging in; a stored login only records who reported. Reports
+are read by the registry operator, remove nothing by themselves, and are limited
+to a few per hour per network. Without `@version` the whole bundle is reported.
+The bundle page on the website has the same form. A registry that predates
+reporting, or has it switched off, answers with a message saying so.
+
 `inspect` and `run` also take a local bundle directory. Omitting `@version`
 means the latest non-yanked version. Always pin the version you inspected:
 the latest version can change between `inspect` and `run`.

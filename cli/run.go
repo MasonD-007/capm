@@ -67,6 +67,7 @@ Commands:
   run       Launch an agent in a Docker Sandbox (sbx)
   search    Find bundles whose owner, name or description contains the text
   list      List bundles in the registry, or only one owner's
+  report    Report a bundle to the registry operator (malware, exposed secrets, impersonation)
   known     List the bundles capm remembers (pinned owners); known forget <owner/name>
   self-update  Replace this binary with the latest release (--check only reports)
   outdated  List bundles you have run that have a newer version, and what it changes
@@ -93,6 +94,11 @@ capm run [--yes] [--workdir DIR] [--model-url URL] [--model-key KEY] [--model NA
   not skip the confirmation: non-interactive runs need --accept-permission-changes.
   The same version served with different bytes is refused unless
   --accept-changed-digest is given.
+
+capm report <user/name[@version]> --reason malware|secrets-exposed|impersonation|other [--details TEXT]
+  Sends an abuse report to the registry operator, who reviews it by hand. It
+  works without logging in (a stored login only records who reported). A report
+  removes nothing by itself. Limited to a few reports per hour per network.
 
 capm init [dir] [--yes] [--name N] [--description T] [--author A] [--base AGENT] [--base-version TAG]
           [--egress HOST] [--mount PATH[:MODE]] [--secret NAME]
@@ -174,6 +180,8 @@ func runCommand(args []string, stdout, stderr io.Writer, e env) int {
 		return search(args[1:], stdout, stderr, e)
 	case "list":
 		return list(args[1:], stdout, stderr, e)
+	case "report":
+		return reportCmd(args[1:], stdout, stderr, e)
 	case "known":
 		return knownCmd(args[1:], stdout, stderr, e)
 	case "self-update":

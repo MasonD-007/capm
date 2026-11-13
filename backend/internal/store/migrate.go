@@ -26,6 +26,7 @@ var migrations = []migration{
 	migrateV4,
 	migrateV5,
 	migrateV6,
+	migrateV7,
 }
 
 // migrateV1 is the schema as it existed before migrations were introduced.
@@ -157,6 +158,42 @@ CREATE TABLE downloads (
 	PRIMARY KEY(owner_id, name, version, day)
 );
 CREATE INDEX downloads_day ON downloads(day, owner_id, name, version, count);`)
+	return err
+}
+
+// migrateV7 adds abuse reports: one row per report of a bundle (version ”
+// means the whole bundle). A pure table addition, so existing rows are never
+// touched; a rolled-back release neither reads nor writes it (it would refuse
+// to start on a version-7 database anyway, see migrate).
+//
+// reporter_key is an HMAC of the reporter's IP under a per-process salt, never
+// the IP. Owner and name are not foreign keys (versions are immutable and
+// never deleted, and a report must outlive any takedown).
+//
+// reports_open serves the admin list (open reports, newest first) and the
+// global open-report count without touching the table; it is partial, so it
+// stays as small as the open backlog, which is capped. reports_dedup serves
+// the de-duplication lookup (same bundle, same reporter_key, recent) and,
+// through its (owner_id, name) prefix, the per-bundle open-report cap. Cost:
+// each insert updates both.
+func migrateV7(tx *sql.Tx) error {
+	_, err := tx.Exec(`
+CREATE TABLE reports (
+	id               INTEGER PRIMARY KEY AUTOINCREMENT,
+	owner_id         INTEGER NOT NULL,
+	name             TEXT NOT NULL,
+	version          TEXT NOT NULL DEFAULT '',
+	reason           TEXT NOT NULL,
+	details          TEXT NOT NULL DEFAULT '',
+	reporter_user_id INTEGER,
+	reporter_key     BLOB NOT NULL,
+	created_at       INTEGER NOT NULL,
+	resolved_at      INTEGER,
+	resolved_by      INTEGER,
+	resolution       TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX reports_open ON reports(created_at DESC, id DESC) WHERE resolved_at IS NULL;
+CREATE INDEX reports_dedup ON reports(owner_id, name, reporter_key, created_at);`)
 	return err
 }
 

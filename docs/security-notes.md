@@ -289,6 +289,58 @@ the user's hourly publish allowance, and per-IP limits apply only to login
 routes), nor the cost of the data in backups. Removed versions free their share
 once the blob is deleted; yanked ones do not.
 
+## Reports are unauthenticated and can be spam
+
+Anyone can file a report without an account (`capm report`, the form on a
+bundle page, or `POST /v1/bundles/{owner}/{name}/report`). Treat reports as
+leads, not evidence: they can be false, malicious, or a campaign against an
+author. Reporting does not remove, hide or flag anything by itself; only an
+admin's `capm admin remove` or `ban` does, and removing does not resolve the
+reports, so they stay in the list until an admin resolves them.
+
+Defences against abuse of the endpoint: 5 reports per client IP per hour, a
+strict 8 KiB JSON body, a fixed list of reasons, details limited to 2000
+characters with control and bidi characters stripped, and caps of 200 open
+reports per bundle and 5000 overall (beyond them reports are accepted and
+dropped, and an attacker learns nothing from the answer: success is always the
+same `202 {}`, with no report id). These bound the table; they do not stop a
+patient attacker with many addresses from burying the real reports under 5000
+junk ones or from filling one bundle's 200 slots to hide a real report there.
+Admins see the newest first and resolve noise in bulk by note.
+
+What is stored about a reporter: the bundle, version, reason and text they
+wrote; the time; their user id if they presented a valid token (a logged-in
+CLI user; the website form is anonymous); and `reporter_key`, an HMAC-SHA256 of
+their IP under a random salt generated when the backend starts and kept only in
+memory. The IP itself is never stored or logged by this feature. Because the
+salt changes at every restart, keys cannot be matched across restarts, and
+without the running process they cannot be reversed to an address (the IPv4
+space is small, so someone holding both the database and the salt could try
+every address; the salt never leaves the process). The key is used only to
+de-duplicate: an identical open report (same bundle, version, reason and key)
+within 24 hours is not stored again. That stops accidental double submits and a
+single address repeating itself; it does not stop one person using several
+addresses or sending the same complaint under a different reason or version,
+and a restart forgets it.
+Report text is shown to admins only, and the CLI strips control and bidi
+characters from it before printing.
+
+The website form is a Next.js Server Action. Next.js rejects an action POST
+whose `Origin` does not match the site's own `Host` (or `X-Forwarded-Host`),
+and actions accept only POST, so another site cannot submit the form on a
+visitor's behalf from a browser; `serverActions.allowedOrigins` is not set, so
+only the site's own origin is allowed. A request with no `Origin` is let
+through with a warning, which is a non-browser client: it could equally call the
+API directly, and is rate limited the same way. The form forwards the visitor's
+address from Cloudflare's `CF-Connecting-IP` (never from `X-Forwarded-For`,
+which a visitor can set), so the per-IP limit applies to the visitor only while
+the site is reachable solely through Cloudflare; anyone who can reach the
+frontend directly (for example on the LAN) could set that header themselves.
+
+The optional `REPORT_WEBHOOK_URL` is set by the operator, never by users, and
+the notification text never contains the reporter's free text (see
+[self-hosting.md](self-hosting.md#reports)).
+
 ## The public deployment
 
 The registry at `https://capm.masondrake.dev` is open to the internet, and

@@ -12,9 +12,10 @@ import (
 func login(args []string, stdout, stderr io.Writer, e env) int {
 	fs := flag.NewFlagSet("login", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	var oidc bool
+	var oidc, orgs bool
 	var audience string
 	fs.BoolVar(&oidc, "oidc", false, "")
+	fs.BoolVar(&orgs, "orgs", false, "")
 	fs.StringVar(&audience, "audience", "", "")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
 		fmt.Fprintln(stderr, loginUse)
@@ -22,7 +23,7 @@ func login(args []string, stdout, stderr io.Writer, e env) int {
 	}
 	var audSet bool
 	fs.Visit(func(f *flag.Flag) { audSet = audSet || f.Name == "audience" })
-	if audSet && (!oidc || audience == "") {
+	if (audSet && (!oidc || audience == "")) || (orgs && oidc) {
 		fmt.Fprintln(stderr, loginUse)
 		return 2
 	}
@@ -34,17 +35,30 @@ func login(args []string, stdout, stderr io.Writer, e env) int {
 		c.Sleep = e.sleep
 	}
 	c.TokenName = tokenName(e)
-	dc, err := c.StartDeviceFlow()
+	var dc client.DeviceCode
+	var err error
+	if orgs {
+		dc, err = c.StartDeviceFlowOrgs()
+	} else {
+		dc, err = c.StartDeviceFlow()
+	}
 	if err != nil {
 		fmt.Fprintf(stderr, "capm login: %v\n", err)
+		return 1
+	}
+	if orgs && dc.Scope != "read:org" {
+		// An older registry ignores the request and would log in without
+		// checking any organisation: say so instead of pretending.
+		fmt.Fprintf(stderr, "capm login: %s does not support --orgs (it is running an older version); nothing was changed\n", client.Sanitize(e.registry))
 		return 1
 	}
 	fmt.Fprintf(stdout, "Open %s and enter the code: %s\nWaiting for authorization...\n", client.Sanitize(dc.VerificationURI), client.Sanitize(dc.UserCode))
-	tok, err := c.PollToken(dc.DeviceCode)
+	res, err := c.PollLogin(dc.DeviceCode, orgs)
 	if err != nil {
 		fmt.Fprintf(stderr, "capm login: %v\n", err)
 		return 1
 	}
+	tok := res.Token
 	id, err := client.New(e.registry, tok).Me()
 	if err != nil {
 		fmt.Fprintf(stderr, "capm login: %v\n", err)
@@ -59,6 +73,9 @@ func login(args []string, stdout, stderr io.Writer, e env) int {
 		return 1
 	}
 	fmt.Fprintf(stdout, "Logged in as %s\n", id.Login)
+	if orgs {
+		printOrgsCheck(stdout, stderr, res.Orgs)
+	}
 	return 0
 }
 

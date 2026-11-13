@@ -93,6 +93,26 @@ func loadCreds(e env) (credentials, error) {
 	return c, nil
 }
 
+// targetOwner is the namespace a command acts under: --owner (flagOwner, set
+// when given, even if empty), else CAPM_OWNER, else the login of the stored
+// token. An organisation is named with --owner or CAPM_OWNER; whether the
+// caller may publish there is the registry's decision, never cached here.
+func targetOwner(e env, c credentials, flagOwner string, flagSet bool) (string, error) {
+	if flagSet {
+		if !segRe.MatchString(flagOwner) {
+			return "", errors.New("--owner is not a valid GitHub login or organisation name")
+		}
+		return flagOwner, nil
+	}
+	if o := strings.TrimSpace(e.getEnv("CAPM_OWNER")); o != "" {
+		if !segRe.MatchString(o) {
+			return "", errors.New("CAPM_OWNER is not a valid GitHub login")
+		}
+		return o, nil
+	}
+	return c.Login, nil
+}
+
 // withLogin fills in Login for credentials that lack it (an env token without
 // CAPM_OWNER) by asking the registry. A publish-scoped token is refused there,
 // and the error says to set CAPM_OWNER.

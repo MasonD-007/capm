@@ -12,7 +12,7 @@ import (
 	"github.com/MasonD-007/capm/manifest"
 )
 
-const lintUse = "usage: capm lint [dir] [--strict] [--offline]"
+const lintUse = "usage: capm lint [dir] [--strict] [--offline] [--owner <org>]"
 
 // printFinding writes one finding as `warning[id]: message` (or error[...]).
 func printFinding(w io.Writer, f manifest.Finding) {
@@ -38,6 +38,8 @@ func lint(args []string, stdout, stderr io.Writer, e env) int {
 	var strict, offline bool
 	fs.BoolVar(&strict, "strict", false, "")
 	fs.BoolVar(&offline, "offline", false, "")
+	var ownerFlag string
+	fs.StringVar(&ownerFlag, "owner", "", "")
 	var pos []string
 	for {
 		if err := fs.Parse(args); err != nil {
@@ -52,6 +54,12 @@ func lint(args []string, stdout, stderr io.Writer, e env) int {
 	}
 	if len(pos) > 1 {
 		fmt.Fprintln(stderr, lintUse)
+		return 2
+	}
+	var ownerSet bool
+	fs.Visit(func(f *flag.Flag) { ownerSet = ownerSet || f.Name == "owner" })
+	if ownerSet && !segRe.MatchString(ownerFlag) {
+		fmt.Fprintf(stderr, "capm lint: --owner is not a valid GitHub login or organisation name\n%s\n", lintUse)
 		return 2
 	}
 	dir := "."
@@ -87,7 +95,7 @@ func lint(args []string, stdout, stderr io.Writer, e env) int {
 	var notes []string
 	if offline {
 		// no network checks
-	} else if f, note := versionFinding(e, m); note != "" {
+	} else if f, note := versionFinding(e, m, ownerFlag, ownerSet); note != "" {
 		notes = append(notes, note)
 	} else {
 		found = append(found, f...)
@@ -116,17 +124,23 @@ func lint(args []string, stdout, stderr io.Writer, e env) int {
 // for the logged-in owner. A non-empty note means the check was skipped; it
 // never fails lint. Only "already exists" and "lower than the latest" are
 // reported; a bundle unknown to the registry is fine.
-func versionFinding(e env, m *manifest.Manifest) ([]manifest.Finding, string) {
+func versionFinding(e env, m *manifest.Manifest, ownerFlag string, ownerSet bool) ([]manifest.Finding, string) {
 	const skipped = "version_not_bumped skipped: "
 	creds, err := loadCreds(e)
 	if err != nil {
 		return nil, skipped + "not logged in (run capm login to compare with the registry, or pass --offline)"
 	}
-	if creds, err = creds.withLogin(e); err != nil {
+	owner, err := targetOwner(e, creds, ownerFlag, ownerSet)
+	if err == nil && owner == "" {
+		if creds, err = creds.withLogin(e); err == nil {
+			owner = creds.Login
+		}
+	}
+	if err != nil {
 		return nil, skipped + err.Error()
 	}
 	name, version := m.Metadata.Name, m.Metadata.Version
-	versions, err := client.New(e.registry, creds.Token).Versions(creds.Login, name)
+	versions, err := client.New(e.registry, creds.Token).Versions(owner, name)
 	if err != nil {
 		var ae *client.APIError
 		if errors.As(err, &ae) && ae.Status == 404 {
@@ -138,7 +152,7 @@ func versionFinding(e env, m *manifest.Manifest) ([]manifest.Finding, string) {
 	for _, v := range versions {
 		if v.Version == version {
 			return []manifest.Finding{{ID: "version_not_bumped", Severity: manifest.LintWarning,
-				Message: fmt.Sprintf("version %s already exists on the registry for %s/%s; push would be rejected, bump metadata.version", version, creds.Login, name)}}, ""
+				Message: fmt.Sprintf("version %s already exists on the registry for %s/%s; push would be rejected, bump metadata.version", version, owner, name)}}, ""
 		}
 		if _, ok := manifest.CompareVersions(v.Version, v.Version); !ok {
 			continue // not semver; the registry should never have stored it
@@ -150,7 +164,7 @@ func versionFinding(e env, m *manifest.Manifest) ([]manifest.Finding, string) {
 	if latest != "" {
 		if c, ok := manifest.CompareVersions(version, latest); ok && c < 0 {
 			return []manifest.Finding{{ID: "version_not_bumped", Severity: manifest.LintWarning,
-				Message: fmt.Sprintf("version %s is lower than the latest published version %s for %s/%s", version, latest, creds.Login, name)}}, ""
+				Message: fmt.Sprintf("version %s is lower than the latest published version %s for %s/%s", version, latest, owner, name)}}, ""
 		}
 	}
 	return nil, ""

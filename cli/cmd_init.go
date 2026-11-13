@@ -19,7 +19,7 @@ import (
 )
 
 const initUse = "usage: capm init [dir] [--yes] [--name NAME] [--description TEXT] [--author NAME]... [--base AGENT]\n" +
-	"                 [--base-version TAG] [--egress HOST]... [--mount PATH[:MODE]]... [--secret NAME]..."
+	"                 [--base-version TAG] [--egress HOST]... [--mount PATH[:MODE]]... [--secret NAME]... [--repository URL]"
 
 // Defaults. The base version is the kit tag the bundled example uses; the
 // other agent has no tag known to this repo, so "latest" is a placeholder the
@@ -40,6 +40,7 @@ func (m *multiFlag) Set(s string) error { *m = append(*m, s); return nil }
 // initSpec is everything the manifest template needs.
 type initSpec struct {
 	name, description string
+	repository        string // optional metadata.repository
 	authors           []string
 	base, baseVersion string
 	egress            []string
@@ -58,6 +59,7 @@ func initCmd(args []string, stdout, stderr io.Writer, e env) int {
 	var (
 		yes                                         bool
 		name, description, base, baseVersion        string
+		repository                                  string
 		authors, egress, mountFlags, secretFlagVals multiFlag
 	)
 	fs.BoolVar(&yes, "yes", false, "")
@@ -66,6 +68,7 @@ func initCmd(args []string, stdout, stderr io.Writer, e env) int {
 	fs.StringVar(&description, "description", "", "")
 	fs.StringVar(&base, "base", "", "")
 	fs.StringVar(&baseVersion, "base-version", "", "")
+	fs.StringVar(&repository, "repository", "", "")
 	fs.Var(&authors, "author", "")
 	fs.Var(&egress, "egress", "")
 	fs.Var(&mountFlags, "mount", "")
@@ -111,6 +114,12 @@ func initCmd(args []string, stdout, stderr io.Writer, e env) int {
 	}
 	if err := checkText("--description", description); err != nil {
 		return usageErr("%v", err)
+	}
+	if repository != "" {
+		if _, _, ok := manifest.ParseRepository(repository); !ok {
+			return usageErr("--repository %q must be https://github.com/<owner>/<repo> exactly (no trailing slash, .git, query or fragment)", shown(repository))
+		}
+		spec.repository = repository
 	}
 	for _, a := range authors {
 		if strings.TrimSpace(a) == "" {
@@ -515,7 +524,23 @@ func askSpec(r *bufio.Reader, out io.Writer, spec *initSpec, versionFromFlag boo
 		}
 		spec.mcp = append(spec.mcp, manifest.MCP{Name: name, URL: url, Secret: secret})
 	}
-	spec.prompt, err = p.yesNo("Create a starter prompt file ("+starterPromptPath+")?", true)
+	if spec.prompt, err = p.yesNo("Create a starter prompt file ("+starterPromptPath+")?", true); err != nil {
+		return err
+	}
+	// Optional, and last so that answers scripted before it existed still
+	// line up: input that ends here just skips it.
+	spec.repository, err = p.ask("Repository URL (https://github.com/<owner>/<repo>; blank for none)", spec.repository, func(s string) error {
+		if s == "" {
+			return nil
+		}
+		if _, _, ok := manifest.ParseRepository(s); !ok {
+			return errors.New("must be https://github.com/<owner>/<repo> exactly (no trailing slash, .git, query or fragment)")
+		}
+		return nil
+	})
+	if errors.Is(err, errInputEnded) {
+		return nil
+	}
 	return err
 }
 
@@ -557,6 +582,12 @@ func renderManifest(s initSpec) string {
 		w("  authors: %s\n", qList(s.authors))
 	} else {
 		w("  # authors: [your-github-login]\n")
+	}
+	if s.repository != "" {
+		w("  # Where the source lives. The registry marks it verified only when the bundle is published from a GitHub Actions workflow of this repository.\n")
+		w("  repository: %s\n", q(s.repository))
+	} else {
+		w("  # repository: https://github.com/<owner>/<repo>\n")
 	}
 	w("\n# The agent runtime this bundle runs on, and its kit tag. Supported: %s.\n", strings.Join(manifest.BaseAgents, ", "))
 	w("base:\n  agent: %s\n  version: %s\n\n", s.base, q(s.baseVersion))

@@ -61,6 +61,7 @@ Usage:
 Commands:
   login     Authenticate with a registry
   whoami    Print the login you are authenticated as
+  orgs      List the organisations you may publish under (recorded by login --orgs)
   logout    Revoke this machine's token and delete the stored credentials
   tokens    List your login tokens; "tokens revoke <id>" revokes one
   usage     Show your storage use and the registry's limits
@@ -108,20 +109,28 @@ capm report <user/name[@version]> --reason malware|secrets-exposed|impersonation
   removes nothing by itself. Limited to a few reports per hour per network.
 
 capm init [dir] [--yes] [--name N] [--description T] [--author A] [--base AGENT] [--base-version TAG]
-          [--egress HOST] [--mount PATH[:MODE]] [--secret NAME]
+          [--egress HOST] [--mount PATH[:MODE]] [--secret NAME] [--repository URL]
   Writes a commented capm.yaml (version 0.1.0, no egress, mounts, secrets or MCP
   servers unless you ask) and optionally prompts/system.md. Asks questions on a
   terminal; --yes takes the defaults plus any flags. Never overwrites a file.
 
-capm lint [dir] [--strict] [--offline]
+capm lint [dir] [--strict] [--offline] [--owner <org>]
   Checks the bundle: manifest errors, missing context files, credential-looking
   files (errors; push refuses on these too, see --allow-secret-files), unlisted
   files (not published), size, and whether the version is new on the registry
   (skipped with --offline). Exit 0 ok, 1 errors (or warnings with --strict), 2 usage.
 
-capm push [--allow-secret-files] <dir>
+capm push [--owner <org>] [--allow-secret-files] <dir>
   Refuses before any request when a listed context file is missing or a packed
-  file looks like a credential.
+  file looks like a credential. Publishes under your login unless --owner (or
+  CAPM_OWNER) names a GitHub organisation; the registry decides whether you may
+  and prints its refusal. capm lint and capm usage accept --owner too.
+
+capm login --orgs
+  Also asks GitHub for read:org so the registry can record which organisations
+  you may publish under (owners, and members of organisations whose base
+  permission is write). The record lasts 24 hours; run it again to refresh it.
+  Plain capm login asks GitHub for no extra permission. capm orgs lists the record.
 
 CI: CAPM_TOKEN=<token> makes every command that signs in use that token for the
   current registry instead of the stored login (it is never written to disk, and
@@ -181,6 +190,8 @@ func runCommand(args []string, stdout, stderr io.Writer, e env) int {
 		return login(args[1:], stdout, stderr, e)
 	case "whoami":
 		return whoami(args[1:], stdout, stderr, e)
+	case "orgs":
+		return orgsCmd(args[1:], stdout, stderr, e)
 	case "logout":
 		return logout(args[1:], stdout, stderr, e)
 	case "tokens":

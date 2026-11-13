@@ -14,11 +14,13 @@ import (
 
 // push packs the bundle directory and publishes it as <login>/<name>@<version>.
 func push(args []string, stdout, stderr io.Writer, e env) int {
-	const use = "usage: capm push [--allow-secret-files] <dir>"
+	const use = "usage: capm push [--owner <org>] [--allow-secret-files] <dir>"
 	fs := flag.NewFlagSet("push", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	var allowSecrets bool
 	fs.BoolVar(&allowSecrets, "allow-secret-files", false, "")
+	var ownerFlag string
+	fs.StringVar(&ownerFlag, "owner", "", "")
 	var pos []string
 	for {
 		if err := fs.Parse(args); err != nil {
@@ -36,6 +38,8 @@ func push(args []string, stdout, stderr io.Writer, e env) int {
 		return 2
 	}
 	args = pos
+	var ownerSet bool
+	fs.Visit(func(f *flag.Flag) { ownerSet = ownerSet || f.Name == "owner" })
 	creds, err := loadCreds(e)
 	if err != nil {
 		fmt.Fprintf(stderr, "capm push: %v\n", err)
@@ -63,12 +67,19 @@ func push(args []string, stdout, stderr io.Writer, e env) int {
 		fmt.Fprintf(stderr, "capm push: %v\n", err)
 		return 1
 	}
-	if creds, err = creds.withLogin(e); err != nil {
+	owner, err := targetOwner(e, creds, ownerFlag, ownerSet)
+	if err == nil && owner == "" {
+		// An env token without CAPM_OWNER: ask the registry who it is.
+		if creds, err = creds.withLogin(e); err == nil {
+			owner = creds.Login
+		}
+	}
+	if err != nil {
 		fmt.Fprintf(stderr, "capm push: %v\n", err)
 		return 1
 	}
 	c := client.New(e.registry, creds.Token)
-	if err := c.Publish(creds.Login, m.Metadata.Name, m.Metadata.Version, tarball); err != nil {
+	if err := c.Publish(owner, m.Metadata.Name, m.Metadata.Version, tarball); err != nil {
 		// A quota rejection carries a sentence written for the publisher
 		// (what limit, how much used); show it as is rather than as an HTTP
 		// error. The oversized-upload 413 has no limit and stays generic.
@@ -80,7 +91,7 @@ func push(args []string, stdout, stderr io.Writer, e env) int {
 		fmt.Fprintf(stderr, "capm push: %v\n", err)
 		return 1
 	}
-	fmt.Fprintf(stdout, "Published %s/%s@%s\n", creds.Login, m.Metadata.Name, m.Metadata.Version)
+	fmt.Fprintf(stdout, "Published %s/%s@%s\n", owner, m.Metadata.Name, m.Metadata.Version)
 	return 0
 }
 

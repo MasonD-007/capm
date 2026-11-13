@@ -27,6 +27,42 @@ type DeviceCode struct {
 	VerificationURI string `json:"verification_uri"`
 	Interval        int    `json:"interval"`
 	ExpiresIn       int    `json:"expires_in"`
+	// Scope is echoed by a registry that honoured an organisation login
+	// (StartDeviceFlowOrgs); an older registry never sets it.
+	Scope string `json:"scope"`
+}
+
+// OrgsCheck is the registry's account of the organisation check at the end of
+// `capm login --orgs`. Every string is untrusted.
+type OrgsCheck struct {
+	Recorded []OrgRole `json:"recorded"`
+	Complete bool      `json:"complete"`
+	Note     string    `json:"note"`
+}
+
+// OrgRole is an organisation and the role that qualifies the user. Role is
+// "admin" (an organisation owner) or "member" (a member whose organisation
+// grants write access).
+type OrgRole struct {
+	Org  string `json:"org"`
+	Role string `json:"role"`
+}
+
+// OrgInfo is one entry of GET /v1/auth/orgs.
+type OrgInfo struct {
+	Org       string    `json:"org"`
+	Role      string    `json:"role"`
+	CheckedAt time.Time `json:"checkedAt"`
+	ExpiresAt time.Time `json:"expiresAt"`
+	Expired   bool      `json:"expired"`
+}
+
+// LoginResult is what a completed device flow returns: the capm token and,
+// for an organisation login, the registry's account of the check (nil when
+// the registry did not send one).
+type LoginResult struct {
+	Token string
+	Orgs  *OrgsCheck
 }
 
 type Identity struct {
@@ -63,12 +99,21 @@ type Resolved struct {
 // not decoded, because the caller recomputes it from the manifest rather than
 // trusting the registry's rendering.
 type Metadata struct {
-	OwnerID   int64             `json:"ownerId,omitempty"`
-	Version   string            `json:"version"`
-	Digest    string            `json:"digest"`
-	Yanked    bool              `json:"yanked"`
-	Manifest  manifest.Manifest `json:"manifest"`
-	CreatedAt time.Time         `json:"createdAt"`
+	OwnerID int64 `json:"ownerId,omitempty"`
+	// OwnerKind is "user" or "org"; empty from an older registry.
+	OwnerKind string `json:"ownerKind,omitempty"`
+	// PublishedBy is the member who published a version of an organisation's
+	// bundle. RepositoryVerified and PublishedVia are the registry's
+	// statements about where the version was published from; the CLI cannot
+	// check them. All are untrusted strings.
+	PublishedBy        string            `json:"publishedBy,omitempty"`
+	RepositoryVerified bool              `json:"repositoryVerified"`
+	PublishedVia       map[string]string `json:"publishedVia,omitempty"`
+	Version            string            `json:"version"`
+	Digest             string            `json:"digest"`
+	Yanked             bool              `json:"yanked"`
+	Manifest           manifest.Manifest `json:"manifest"`
+	CreatedAt          time.Time         `json:"createdAt"`
 }
 
 type VersionInfo struct {
@@ -254,9 +299,21 @@ func (c *Client) getJSON(path string, out any) error {
 	return json.Unmarshal(b, out)
 }
 
-func (c *Client) StartDeviceFlow() (DeviceCode, error) {
+func (c *Client) StartDeviceFlow() (DeviceCode, error) { return c.startDeviceFlow(false) }
+
+// StartDeviceFlowOrgs starts a login that also asks GitHub for permission to
+// read the user's organisation memberships (`capm login --orgs`). A registry
+// that supports it echoes the scope in the reply; callers must check
+// DeviceCode.Scope before going on.
+func (c *Client) StartDeviceFlowOrgs() (DeviceCode, error) { return c.startDeviceFlow(true) }
+
+func (c *Client) startDeviceFlow(orgs bool) (DeviceCode, error) {
 	var d DeviceCode
-	b, err := c.do("POST", "/v1/auth/device", []byte("{}"), MaxJSONBytes)
+	body := []byte("{}")
+	if orgs {
+		body = []byte(`{"orgs":true}`)
+	}
+	b, err := c.do("POST", "/v1/auth/device", body, MaxJSONBytes)
 	if err != nil {
 		return d, err
 	}
@@ -278,9 +335,19 @@ func (c *Client) StartDeviceFlow() (DeviceCode, error) {
 // PollToken polls until the user authorizes the device code and returns the
 // capm API token. It waits PollInterval between polls and backs off on slow_down.
 func (c *Client) PollToken(deviceCode string) (string, error) {
-	req := map[string]string{"device_code": deviceCode}
+	res, err := c.PollLogin(deviceCode, false)
+	return res.Token, err
+}
+
+// PollLogin is PollToken that also returns the organisation check when orgs
+// is set.
+func (c *Client) PollLogin(deviceCode string, orgs bool) (LoginResult, error) {
+	req := map[string]any{"device_code": deviceCode}
 	if c.TokenName != "" {
 		req["name"] = c.TokenName
+	}
+	if orgs {
+		req["orgs"] = true
 	}
 	body, _ := json.Marshal(req)
 	timeout := c.PollTimeout
@@ -296,30 +363,40 @@ func (c *Client) PollToken(deviceCode string) (string, error) {
 		b, err := c.do("POST", "/v1/auth/token", body, MaxJSONBytes)
 		if err == nil {
 			var out struct {
-				Token string `json:"token"`
+				Token string     `json:"token"`
+				Orgs  *OrgsCheck `json:"orgs"`
 			}
 			if err := json.Unmarshal(b, &out); err != nil || out.Token == "" {
-				return "", errors.New("registry returned no token")
+				return LoginResult{}, errors.New("registry returned no token")
 			}
-			return out.Token, nil
+			return LoginResult{Token: out.Token, Orgs: out.Orgs}, nil
 		}
 		var ae *APIError
 		if !errors.As(err, &ae) {
-			return "", err
+			return LoginResult{}, err
 		}
 		switch ae.Msg {
 		case "authorization_pending":
 		case "slow_down":
 			interval += 5 * time.Second
 		default:
-			return "", fmt.Errorf("login failed: %s", Sanitize(ae.Msg))
+			return LoginResult{}, fmt.Errorf("login failed: %s", Sanitize(ae.Msg))
 		}
 		if waited >= timeout {
-			return "", errors.New("login timed out; run capm login again")
+			return LoginResult{}, errors.New("login timed out; run capm login again")
 		}
 		c.Sleep(interval)
 		waited += interval
 	}
+}
+
+// Orgs lists the organisations the caller has a publish record for. A
+// registry that predates organisations answers with an error for which
+// IsUnsupported is true.
+func (c *Client) Orgs() ([]OrgInfo, error) {
+	var out []OrgInfo
+	err := c.getJSON("/v1/auth/orgs", &out)
+	return out, err
 }
 
 // Me returns the identity the client's token belongs to.
@@ -405,9 +482,17 @@ type Usage struct {
 
 // Usage fetches the caller's usage. A registry that predates quotas answers
 // with an error for which IsUnsupported is true.
-func (c *Client) Usage() (Usage, error) {
+func (c *Client) Usage() (Usage, error) { return c.UsageOf("") }
+
+// UsageOf is Usage for an organisation the caller may publish under; "" means
+// the caller's own account.
+func (c *Client) UsageOf(owner string) (Usage, error) {
 	var u Usage
-	err := c.getJSON("/v1/auth/usage", &u)
+	path := "/v1/auth/usage"
+	if owner != "" {
+		path += "?owner=" + url.QueryEscape(owner)
+	}
+	err := c.getJSON(path, &u)
 	return u, err
 }
 

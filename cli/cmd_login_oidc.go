@@ -57,7 +57,7 @@ func checkActionsURL(raw string) error {
 	return nil
 }
 
-const loginUse = "usage: capm login [--oidc [--audience URL]]"
+const loginUse = "usage: capm login [--orgs]\n       capm login --oidc [--audience URL]"
 
 // loginOIDC, run inside GitHub Actions, trades the job's OIDC identity for a
 // short-lived publish-only registry token. stdout gets the token and nothing

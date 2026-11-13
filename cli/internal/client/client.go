@@ -323,6 +323,31 @@ func (c *Client) Me() (Identity, error) {
 	return id, err
 }
 
+// OIDCToken is the reply of POST /v1/auth/oidc: a short-lived, publish-only
+// registry token. Login and ExpiresAt are untrusted strings.
+type OIDCToken struct {
+	Token     string `json:"token"`
+	ExpiresAt string `json:"expiresAt"`
+	Login     string `json:"login"`
+}
+
+// OIDCExchange trades a GitHub Actions OIDC ID token for a registry token.
+func (c *Client) OIDCExchange(idToken string) (OIDCToken, error) {
+	body, err := json.Marshal(map[string]string{"token": idToken})
+	if err != nil {
+		return OIDCToken{}, err
+	}
+	b, err := c.do("POST", "/v1/auth/oidc", body, MaxJSONBytes)
+	if err != nil {
+		return OIDCToken{}, err
+	}
+	var out OIDCToken
+	if err := json.Unmarshal(b, &out); err != nil {
+		return OIDCToken{}, fmt.Errorf("registry returned an unreadable reply")
+	}
+	return out, nil
+}
+
 // IsUnsupported reports whether err means the registry predates token
 // management: the route does not exist (a 404 that is not the new server's own
 // JSON "not found") or the method is not allowed.

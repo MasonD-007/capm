@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"time"
@@ -29,6 +30,11 @@ type env struct {
 	tempRoot   string // parent for temp dirs; "" means os.TempDir()
 
 	upd updateEnv // self-update and the update notice (updatecheck.go)
+
+	// actionsHosts, when set, replaces the GitHub Actions host check of
+	// `capm login --oidc`. Only unit tests set it; there is no way to set it
+	// from the command line or environment (see testActionsHosts).
+	actionsHosts func(*url.URL) bool
 }
 
 // version is set at build time with -ldflags "-X main.version=<commit>".
@@ -115,6 +121,16 @@ capm lint [dir] [--strict] [--offline]
 capm push [--allow-secret-files] <dir>
   Refuses before any request when a listed context file is missing or a packed
   file looks like a credential.
+
+CI: CAPM_TOKEN=<token> makes every command that signs in use that token for the
+  current registry instead of the stored login (it is never written to disk, and
+  capm logout leaves the stored login alone). A publish-only CI token cannot say
+  who it belongs to, so also set CAPM_OWNER=<github login> for push and lint.
+capm login --oidc [--audience URL]
+  Inside GitHub Actions (permissions: id-token: write) trades the job's identity
+  for a 15-minute publish-only token and prints just that token to stdout, e.g.
+  CAPM_TOKEN=$(capm login --oidc). Nothing is stored. The audience defaults to
+  the registry URL.
 
 capm pull [--accept-new-owner] user/name[@version]
   Downloads the bundle into ./name/ after checking its digest, and remembers

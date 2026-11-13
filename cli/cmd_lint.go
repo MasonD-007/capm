@@ -122,6 +122,9 @@ func versionFinding(e env, m *manifest.Manifest) ([]manifest.Finding, string) {
 	if err != nil {
 		return nil, skipped + "not logged in (run capm login to compare with the registry, or pass --offline)"
 	}
+	if creds, err = creds.withLogin(e); err != nil {
+		return nil, skipped + err.Error()
+	}
 	name, version := m.Metadata.Name, m.Metadata.Version
 	versions, err := client.New(e.registry, creds.Token).Versions(creds.Login, name)
 	if err != nil {

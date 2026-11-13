@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -9,9 +10,24 @@ import (
 )
 
 func login(args []string, stdout, stderr io.Writer, e env) int {
-	if len(args) != 0 {
-		fmt.Fprintln(stderr, "usage: capm login")
+	fs := flag.NewFlagSet("login", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	var oidc bool
+	var audience string
+	fs.BoolVar(&oidc, "oidc", false, "")
+	fs.StringVar(&audience, "audience", "", "")
+	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
+		fmt.Fprintln(stderr, loginUse)
 		return 2
+	}
+	var audSet bool
+	fs.Visit(func(f *flag.Flag) { audSet = audSet || f.Name == "audience" })
+	if audSet && (!oidc || audience == "") {
+		fmt.Fprintln(stderr, loginUse)
+		return 2
+	}
+	if oidc {
+		return loginOIDC(audience, stdout, stderr, e)
 	}
 	c := client.New(e.registry, "")
 	if e.sleep != nil {

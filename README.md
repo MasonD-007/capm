@@ -52,9 +52,9 @@ Think of it as Android-style permissions for agents:
 - **Signing:** packages are signed (cosign) so installers can verify who published them.
 - **Runtime (v0):** [Docker Sandboxes](https://docs.docker.com/ai/sandboxes/) (`sbx`). Each agent gets its own microVM with its own kernel, filesystem, and Docker daemon. The manifest's egress list becomes sbx network policy, and required secrets are pulled from the sbx secret store.
 
-## Manifest (v0 draft)
+## Manifest
 
-Custom agents are the general case. Coding agents (Claude Code, Codex, etc.) are just a preset base image.
+A bundle is a directory with a `capm.yaml`, the context files it lists, and optionally a root `README.md`. It builds on a base agent kit (Claude Code or OpenCode) rather than shipping its own image. `capm init` writes a commented starter file.
 
 ```yaml
 apiVersion: capm/v0
@@ -65,51 +65,66 @@ metadata:
   description: Reviews open pull requests and leaves comments.
   authors: [MasonD-007]
 
-runtime:
-  image: ghcr.io/masond-007/pr-reviewer@sha256:...   # pinned by digest
-  entrypoint: ["/agent/run"]
+base:
+  agent: claude-code       # or opencode
+  version: 2.1.292         # kit tag
 
 interface:
-  type: tty            # v0 supports tty only; http / mcp / a2a planned
+  type: tty                # the only supported type
 
 model:
-  api: openai-compatible   # base URL + key injected at run time
+  api: openai-compatible   # base URL and key are supplied by whoever runs it
   requires:
     toolCalling: true
     minContextTokens: 32000
 
 permissions:
-  egress:
-    - api.github.com
+  egress: [api.github.com]
   mounts:
     - path: ./workspace
       mode: read-only
 
 secrets:
   - name: GITHUB_TOKEN
-    description: Token with repo read and PR comment scope
-```
+    description: Token used to read pull requests
 
-Field reference (planned):
+mcp:
+  - name: gh
+    url: https://mcp.example.com/mcp
+    secret: GITHUB_TOKEN   # sent only to this server
+
+context:
+  - prompts/review.md
+```
 
 | Field | Purpose |
 |---|---|
-| `runtime.image` | Container image for the agent, pinned by digest |
-| `runtime.entrypoint` | Command the sandbox runs |
-| `interface.type` | How the installer talks to the agent |
-| `model` | What the agent needs from a model; the endpoint itself is supplied by the installer |
-| `permissions.egress` | The only domains the agent can reach |
-| `permissions.mounts` | Host paths exposed to the sandbox, and in what mode |
-| `secrets` | Names of secrets injected at run time; never values |
+| `metadata` | Name, version, description, authors, and an optional `repository` link |
+| `base` | The agent kit the bundle runs on, and its version |
+| `interface.type` | How the person running it talks to the agent |
+| `model` | What the agent needs from a model; the endpoint itself is supplied at run time |
+| `permissions.egress` | Hosts the agent declares it reaches (exact hostnames, no wildcards) |
+| `permissions.mounts` | Workspace paths exposed to the sandbox, and in what mode |
+| `secrets` | Names of secrets supplied at run time; never values |
+| `mcp` | Remote MCP servers, each optionally bound to one secret |
+| `context` | Files published with the bundle and given to the agent |
 
-## Planned CLI
+These are **declared** permissions. `capm run` does not yet restrict the sandbox to exactly the listed hosts; see [docs/security-notes.md](docs/security-notes.md).
+
+## CLI
 
 ```
-capm push      Package and publish an agent to a registry
-capm pull      Fetch an agent and verify its signature
-capm inspect   Show the enforced permission summary before installing
-capm run       Translate the manifest to sandbox policy, inject secrets and model endpoint, launch
+capm init      Scaffold a new bundle
+capm lint      Check a bundle before publishing
+capm inspect   Show a bundle's declared permissions and risk labels
+capm login     Sign in with GitHub
+capm push      Publish a bundle
+capm search    Find bundles (also: capm list)
+capm pull      Download a bundle and check its sha256 digest (bundles are not signed)
+capm run       Launch a bundle in a Docker Sandbox
 ```
+
+`capm` with no arguments lists every command. [docs/getting-started.md](docs/getting-started.md) walks through writing and publishing a first bundle.
 
 ## Summaries
 

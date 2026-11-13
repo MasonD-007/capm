@@ -63,6 +63,9 @@ type API struct {
 	reportSalt   []byte
 	// countDownload records one successful download; tests replace it.
 	countDownload func(owner, name, version string) error
+	// authzHook, when set (tests only), hears the route pattern of every call
+	// to authorizeOwner.
+	authzHook func(pattern string)
 }
 
 func New(s *store.Store, auth AuthFunc) *API { return NewWithConfig(s, auth, Config{}) }
@@ -234,7 +237,9 @@ func (a *API) list(w http.ResponseWriter, r *http.Request) {
 	type item struct {
 		Owner      int64  `json:"ownerId"`
 		OwnerLogin string `json:"owner"`
-		Name       string `json:"name"`
+		// OwnerKind is "user" or "org".
+		OwnerKind string `json:"ownerKind"`
+		Name      string `json:"name"`
 		// Latest is the version `capm run` would resolve (see
 		// latestInstallable); empty when every version is yanked.
 		Latest string `json:"latest"`
@@ -256,7 +261,7 @@ func (a *API) list(w http.ResponseWriter, r *http.Request) {
 	}
 	// fill adds the latest installable version and its description.
 	fill := func(b store.BundleStat) (item, error) {
-		it := item{Owner: b.Owner, OwnerLogin: b.OwnerLogin, Name: b.Name, RiskLabels: []manifest.RiskLabel{}, Downloads30d: b.Downloads30d}
+		it := item{Owner: b.Owner, OwnerLogin: b.OwnerLogin, OwnerKind: b.OwnerKind, Name: b.Name, RiskLabels: []manifest.RiskLabel{}, Downloads30d: b.Downloads30d}
 		if !b.UpdatedAt.IsZero() {
 			u := b.UpdatedAt
 			it.UpdatedAt = &u
@@ -352,8 +357,12 @@ func (a *API) versions(w http.ResponseWriter, r *http.Request) {
 		Digest    string            `json:"digest"`
 		Yanked    bool              `json:"yanked"`
 		Manifest  manifest.Manifest `json:"manifest"`
-		Summary   manifest.Summary  `json:"summary"`
-		CreatedAt time.Time         `json:"createdAt"`
+		OwnerKind string            `json:"ownerKind"`
+		// PublishedBy is the login of the member who published a version of
+		// an organisation's bundle; absent for a user's own namespace.
+		PublishedBy string           `json:"publishedBy,omitempty"`
+		Summary     manifest.Summary `json:"summary"`
+		CreatedAt   time.Time        `json:"createdAt"`
 		// Removed versions stay listed (their number can never be reused)
 		// but their manifest is withheld: a takedown may be about its content.
 		Removed       bool   `json:"removed"`
@@ -378,7 +387,7 @@ func (a *API) versions(w http.ResponseWriter, r *http.Request) {
 		if v.Removed {
 			m = manifest.Manifest{}
 		}
-		out = append(out, item{v.Version, v.Digest, v.Yanked, m, m.EnforcedSummary(), v.CreatedAt, v.Removed, v.RemovedReason, dl[v.Version].Total, dl[v.Version].Last30d, publishedVia(v.PublishedVia)})
+		out = append(out, item{Version: v.Version, Digest: v.Digest, Yanked: v.Yanked, Manifest: m, OwnerKind: v.OwnerKind, PublishedBy: v.PublishedBy, Summary: m.EnforcedSummary(), CreatedAt: v.CreatedAt, Removed: v.Removed, RemovedReason: v.RemovedReason, Downloads: dl[v.Version].Total, Downloads30d: dl[v.Version].Last30d, PublishedVia: publishedVia(v.PublishedVia)})
 	}
 	writeJSON(w, 200, out)
 }
@@ -410,7 +419,7 @@ func (a *API) metadata(w http.ResponseWriter, r *http.Request) {
 		writeGone(w, pick.RemovedReason)
 		return
 	}
-	out := map[string]any{"ownerId": pick.OwnerID, "version": pick.Version, "digest": pick.Digest, "yanked": pick.Yanked, "manifest": pick.Manifest, "summary": pick.Manifest.EnforcedSummary(), "riskLabels": pick.Manifest.RiskLabels(), "createdAt": pick.CreatedAt}
+	out := map[string]any{"ownerId": pick.OwnerID, "ownerKind": pick.OwnerKind, "version": pick.Version, "digest": pick.Digest, "yanked": pick.Yanked, "manifest": pick.Manifest, "summary": pick.Manifest.EnforcedSummary(), "riskLabels": pick.Manifest.RiskLabels(), "createdAt": pick.CreatedAt}
 	// Raw request counts for this version (not a trust signal).
 	dl, err := a.store.VersionDownloads(r.PathValue("owner"), r.PathValue("name"))
 	if err != nil {
@@ -420,6 +429,9 @@ func (a *API) metadata(w http.ResponseWriter, r *http.Request) {
 	out["downloads"], out["downloads30d"] = dl[pick.Version].Total, dl[pick.Version].Last30d
 	if pv := publishedVia(pick.PublishedVia); pv != nil {
 		out["publishedVia"] = pv
+	}
+	if pick.PublishedBy != "" {
+		out["publishedBy"] = pick.PublishedBy
 	}
 	// The README is author-supplied, unverified text. It is only on this
 	// per-version endpoint (never in lists, for size) and omitted when empty.
@@ -469,13 +481,13 @@ func (a *API) publish(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	id, login := tk.UserID, tk.Login
 	owner, name, version := r.PathValue("owner"), r.PathValue("name"), r.PathValue("version")
-	if !strings.EqualFold(owner, login) {
-		writeErr(w, 403, "you can only publish under your own login")
+	acc, ok := a.authorizeOwner(w, r, tk, owner, actPublish)
+	if !ok {
 		return
 	}
-	if ok, retry := a.publishLim.Allow(strconv.FormatInt(id, 10)); !ok {
+	id, login := acc.Owner.ID, acc.Owner.Login
+	if ok, retry := a.publishLim.Allow(strconv.FormatInt(tk.UserID, 10)); !ok {
 		tooMany(w, retry)
 		return
 	}
@@ -492,7 +504,7 @@ func (a *API) publish(w http.ResponseWriter, r *http.Request) {
 	// A publish rejected by a quota still counts against the hourly allowance
 	// (Allow above already recorded it). Refunding it would let a user parked
 	// at their limit upload and have unpacked 5 MiB bodies without bound.
-	err = a.store.PublishVia(id, login, name, version, body, viaRecord(tk))
+	err = a.store.PublishAs(id, login, name, version, body, store.PublishMeta{Via: viaRecord(tk), PublishedBy: acc.PublishedBy})
 	var qe *store.QuotaError
 	switch {
 	case err == nil:
@@ -518,11 +530,11 @@ func (a *API) yank(yanked bool) http.HandlerFunc {
 		if !ok {
 			return
 		}
-		id, login := tk.UserID, tk.Login
-		if !strings.EqualFold(r.PathValue("owner"), login) {
-			writeErr(w, 403, "only the owner can yank or un-yank versions")
+		acc, ok := a.authorizeOwner(w, r, tk, r.PathValue("owner"), actYank)
+		if !ok {
 			return
 		}
+		id, login := acc.Owner.ID, acc.Owner.Login
 		name, version := r.PathValue("name"), r.PathValue("version")
 		err := a.store.SetYanked(id, name, version, yanked)
 		switch {
@@ -624,7 +636,7 @@ func (a *API) resolve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	out := map[string]any{"ownerId": pick.OwnerID, "version": pick.Version, "digest": pick.Digest, "yanked": pick.Yanked}
+	out := map[string]any{"ownerId": pick.OwnerID, "ownerKind": pick.OwnerKind, "version": pick.Version, "digest": pick.Digest, "yanked": pick.Yanked}
 	if pick.Yanked {
 		out["warning"] = "yanked"
 	}

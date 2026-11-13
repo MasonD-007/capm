@@ -35,6 +35,8 @@ type Config struct {
 	AdminIDs []int64
 	// TokenTTL is how long newly issued tokens stay valid; 0 means forever.
 	TokenTTL time.Duration
+	// OIDC enables POST /v1/auth/oidc (publish from CI); nil disables it.
+	OIDC *OIDCConfig
 }
 
 type Service struct {
@@ -42,6 +44,7 @@ type Service struct {
 	cfg   Config
 	hc    *http.Client
 	admin map[int64]bool
+	oidc  *oidcState // nil = endpoint disabled
 }
 
 func New(st *store.Store, cfg Config) *Service {
@@ -57,7 +60,11 @@ func New(st *store.Store, cfg Config) *Service {
 	for _, id := range cfg.AdminIDs {
 		admin[id] = true
 	}
-	return &Service{store: st, cfg: cfg, hc: &http.Client{Timeout: 15 * time.Second}, admin: admin}
+	svc := &Service{store: st, cfg: cfg, hc: &http.Client{Timeout: 15 * time.Second}, admin: admin}
+	if cfg.OIDC != nil {
+		svc.oidc = newOIDCState(cfg.OIDC)
+	}
+	return svc
 }
 
 // ParseAdminIDs parses the ADMIN_GITHUB_IDS value: comma-separated positive
@@ -91,6 +98,7 @@ func (s *Service) IsAdmin(id int64) bool { return s.admin[id] }
 func (s *Service) register(handle func(pattern string, h func(http.ResponseWriter, *http.Request))) {
 	handle("POST /v1/auth/device", s.device)
 	handle("POST /v1/auth/token", s.token)
+	handle("POST /v1/auth/oidc", s.oidcExchange)
 	handle("GET /v1/auth/me", s.me)
 	handle("GET /v1/auth/usage", s.usage)
 	handle("GET /v1/auth/tokens", s.listTokens)

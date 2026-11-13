@@ -174,6 +174,14 @@ func TestScopedTokenIsRefusedOnEveryAuthenticatedRoute(t *testing.T) {
 	}
 }
 
+// The two packages each name the scope (auth mints it, api enforces it); they
+// must never drift apart.
+func TestScopeNamesAgree(t *testing.T) {
+	if auth.ScopePublish != api.ScopePublish {
+		t.Fatalf("auth %q != api %q", auth.ScopePublish, api.ScopePublish)
+	}
+}
+
 // Every route a full token can use stays usable (the gate must not break
 // existing behaviour).
 func TestFullTokenStillUsesTokenRoutes(t *testing.T) {

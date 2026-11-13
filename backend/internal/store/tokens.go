@@ -71,6 +71,13 @@ func (s *Store) CreateScopedToken(hash []byte, userID int64, name string, expire
 	return err
 }
 
+// CountLiveTokens is how many usable (not revoked, not expired) tokens of the
+// given scope userID has.
+func (s *Store) CountLiveTokens(userID int64, scope string) (int64, error) {
+	return count(s.db, `SELECT count(*) FROM tokens WHERE user_id = ? AND scope = ? AND revoked_at IS NULL
+		AND (expires_at IS NULL OR expires_at > ?)`, userID, scope, s.now().Unix())
+}
+
 // repairTokenIDs gives an id to token rows that lack one. Only the previous
 // release's CreateToken makes such rows (it does not know the id column), so
 // they appear if the server is rolled back and forward again. Rows are

@@ -13,9 +13,11 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode"
 
 	"github.com/MasonD-007/capm/backend/internal/api"
 	"github.com/MasonD-007/capm/backend/internal/auth"
+	"github.com/MasonD-007/capm/backend/internal/oidc"
 	"github.com/MasonD-007/capm/backend/internal/store"
 	"github.com/joho/godotenv"
 )
@@ -105,6 +107,48 @@ func parseQuotaLimits(getenv func(string) string) (store.Limits, error) {
 	return l, nil
 }
 
+const (
+	defaultOIDCIssuer   = "https://token.actions.githubusercontent.com"
+	defaultOIDCAudience = "https://capm.masondrake.dev"
+)
+
+// parseOIDC reads OIDC_ISSUER, OIDC_JWKS_URL and OIDC_AUDIENCE (publish from
+// CI). Unset OIDC_ISSUER means GitHub Actions; set but empty disables the
+// endpoint (nil config, no error). Anything malformed is an error, so the
+// server refuses to start rather than run a security setting it misread. An
+// explicitly empty audience is an error: it could match a token without one.
+func parseOIDC(lookup func(string) (string, bool)) (*auth.OIDCConfig, error) {
+	issuer, set := lookup("OIDC_ISSUER")
+	issuer = strings.TrimSpace(issuer)
+	if !set {
+		issuer = defaultOIDCIssuer
+	}
+	if issuer == "" {
+		return nil, nil
+	}
+	derived, err := oidc.JWKSURLFor(issuer)
+	if err != nil {
+		return nil, fmt.Errorf("OIDC_ISSUER %w", err)
+	}
+	// iss must equal the configured string exactly, so it is kept verbatim.
+	cfg := &auth.OIDCConfig{Issuer: issuer, JWKSURL: derived, Audience: defaultOIDCAudience}
+	if v, ok := lookup("OIDC_JWKS_URL"); ok && strings.TrimSpace(v) != "" {
+		u, err := oidc.ValidateEndpoint(strings.TrimSpace(v))
+		if err != nil {
+			return nil, fmt.Errorf("OIDC_JWKS_URL %w", err)
+		}
+		cfg.JWKSURL = u.String()
+	}
+	if v, ok := lookup("OIDC_AUDIENCE"); ok {
+		v = strings.TrimSpace(v)
+		if v == "" || len(v) > 256 || strings.IndexFunc(v, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) >= 0 {
+			return nil, errors.New("OIDC_AUDIENCE must be one non-empty string of at most 256 characters without spaces")
+		}
+		cfg.Audience = v
+	}
+	return cfg, nil
+}
+
 func main() {
 	if err := godotenv.Load(); err != nil && !os.IsNotExist(err) {
 		log.Fatalf("load .env: %v", err)
@@ -158,7 +202,17 @@ func main() {
 		log.Printf("purged %d old token rows", n)
 	}
 
+	oidcCfg, err := parseOIDC(os.LookupEnv)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if oidcCfg == nil {
+		log.Print("OIDC_ISSUER is empty: POST /v1/auth/oidc (publish from CI) is disabled")
+	} else {
+		log.Printf("publish from CI: issuer %s, jwks %s, audience %s", oidcCfg.Issuer, oidcCfg.JWKSURL, oidcCfg.Audience)
+	}
 	authSvc := auth.New(st, auth.Config{
+		OIDC:     oidcCfg,
 		TokenTTL: tokenTTL,
 		AdminIDs: admins,
 		ClientID: os.Getenv("GITHUB_CLIENT_ID"),
@@ -187,6 +241,7 @@ func main() {
 		MaxBundleBytes:  int64(envInt("MAX_BUNDLE_BYTES", 5<<20)),
 		PublishPerHour:  envInt("PUBLISH_RATE_PER_HOUR", 30),
 		IsAdmin:         authSvc.IsAdmin,
+		AuthDetail:      authSvc.AuthenticateDetail,
 		TrustProxy:      trustProxy,
 		ClientIPHeader:  ipHeader,
 		ReportPerHour:   reportRate,

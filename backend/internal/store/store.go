@@ -32,7 +32,9 @@ var (
 type Bundle struct {
 	Owner      int64
 	OwnerLogin string
-	Name       string
+	// OwnerKind is KindUser or KindOrg.
+	OwnerKind string
+	Name      string
 }
 
 type Version struct {
@@ -50,6 +52,16 @@ type Version struct {
 	// PublishedVia is the compact JSON provenance record of a version
 	// published with a CI token (see PublishVia); "" for every other version.
 	PublishedVia string
+	// OwnerKind is the owner account's kind (KindUser or KindOrg).
+	OwnerKind string
+	// PublishedBy is the login of the user who published the version when that
+	// is not the owner (a member publishing for an organisation); "" for a
+	// user's own namespace and when unknown (versions from before migration 9,
+	// CI tokens of organisations).
+	PublishedBy string
+	// RepoVerified is true only for a version published by a CI token whose
+	// verified repository claim equals the manifest's metadata.repository.
+	RepoVerified bool
 }
 
 type Store struct {
@@ -129,6 +141,22 @@ func (s *Store) Publish(ownerID int64, ownerLogin, name, version string, tarball
 // PublishVia is Publish that also records via, the JSON provenance of a CI
 // token ("" for none), in the same transaction as the version row.
 func (s *Store) PublishVia(ownerID int64, ownerLogin, name, version string, tarball []byte, via string) error {
+	return s.PublishAs(ownerID, ownerLogin, name, version, tarball, PublishMeta{Via: via})
+}
+
+// PublishMeta is what Publish records about who published a version.
+type PublishMeta struct {
+	// Via is the JSON provenance of a CI token ("" for none).
+	Via string
+	// PublishedBy is the acting user's id; nil when there is no human user
+	// (a CI token of an organisation).
+	PublishedBy *int64
+}
+
+// PublishAs is Publish with the publisher recorded in the same transaction as
+// the version row.
+func (s *Store) PublishAs(ownerID int64, ownerLogin, name, version string, tarball []byte, pm PublishMeta) error {
+	via := pm.Via
 	tmp, err := os.MkdirTemp("", "capm-unpack-")
 	if err != nil {
 		return err
@@ -178,7 +206,16 @@ func (s *Store) PublishVia(ownerID int64, ownerLogin, name, version string, tarb
 	}
 	defer tx.Rollback()
 
-	if err := upsertUser(tx, ownerID, ownerLogin); err != nil {
+	// The owner keeps the kind it already has (an organisation stays an
+	// organisation); an id seen for the first time here is a user.
+	kind := KindUser
+	switch err := tx.QueryRow(`SELECT kind FROM users WHERE id = ?`, ownerID).Scan(&kind); {
+	case errors.Is(err, sql.ErrNoRows):
+		kind = KindUser
+	case err != nil:
+		return err
+	}
+	if err := upsertAccount(tx, ownerID, ownerLogin, kind); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(`INSERT OR IGNORE INTO bundles(name, owner_id) VALUES(?, ?)`, name, ownerID); err != nil {
@@ -199,8 +236,8 @@ func (s *Store) PublishVia(ownerID int64, ownerLogin, name, version string, tarb
 	if err := s.checkQuota(tx, ownerID, name, "sha256:"+hexsum, int64(len(tarball))); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`INSERT INTO versions(owner_id, name, version, digest, manifest, created_at, size, readme, published_via)
-		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`, ownerID, name, version, "sha256:"+hexsum, string(mj), s.now().Unix(), len(tarball), readme, via); err != nil {
+	if _, err := tx.Exec(`INSERT INTO versions(owner_id, name, version, digest, manifest, created_at, size, readme, published_via, published_by)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, ownerID, name, version, "sha256:"+hexsum, string(mj), s.now().Unix(), len(tarball), readme, via, pm.PublishedBy); err != nil {
 		if isUnique(err) {
 			return ErrVersionExists
 		}
@@ -222,8 +259,9 @@ func (s *Store) PublishVia(ownerID int64, ownerLogin, name, version string, tarb
 }
 
 func (s *Store) Versions(ownerLogin, name string) ([]Version, error) {
-	rows, err := s.db.Query(`SELECT v.owner_id, v.version, v.digest, v.yanked, v.manifest, v.created_at, v.removed, v.removed_reason, v.published_via
-		FROM versions v JOIN users u ON u.id = v.owner_id
+	rows, err := s.db.Query(`SELECT v.owner_id, v.version, v.digest, v.yanked, v.manifest, v.created_at, v.removed, v.removed_reason, v.published_via,
+		u.kind, CASE WHEN v.published_by = v.owner_id THEN '' ELSE COALESCE(pb.login, '') END, v.repo_verified
+		FROM versions v JOIN users u ON u.id = v.owner_id LEFT JOIN users pb ON pb.id = v.published_by AND pb.login NOT LIKE '~%'
 		WHERE u.login = ? AND v.name = ?`+notBanned+` ORDER BY v.created_at, v.rowid`, ownerLogin, name)
 	if err != nil {
 		return nil, err
@@ -232,13 +270,15 @@ func (s *Store) Versions(ownerLogin, name string) ([]Version, error) {
 	var out []Version
 	for rows.Next() {
 		var (
-			v       Version
-			mj      string
-			yanked  int
-			created int64
-			removed int
+			v        Version
+			mj       string
+			yanked   int
+			created  int64
+			removed  int
+			verified int
 		)
-		if err := rows.Scan(&v.OwnerID, &v.Version, &v.Digest, &yanked, &mj, &created, &removed, &v.RemovedReason, &v.PublishedVia); err != nil {
+		if err := rows.Scan(&v.OwnerID, &v.Version, &v.Digest, &yanked, &mj, &created, &removed, &v.RemovedReason, &v.PublishedVia,
+			&v.OwnerKind, &v.PublishedBy, &verified); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal([]byte(mj), &v.Manifest); err != nil {
@@ -246,6 +286,7 @@ func (s *Store) Versions(ownerLogin, name string) ([]Version, error) {
 		}
 		v.Yanked = yanked != 0
 		v.Removed = removed != 0
+		v.RepoVerified = verified != 0
 		v.CreatedAt = time.Unix(created, 0).UTC()
 		out = append(out, v)
 	}
@@ -304,7 +345,7 @@ func (s *Store) List(limit, offset int) ([]Bundle, error) {
 // ListByOwner is List restricted to one owner login (case-insensitive exact
 // match); "" means every owner. A negative limit means no limit.
 func (s *Store) ListByOwner(owner string, limit, offset int) ([]Bundle, error) {
-	rows, err := s.db.Query(`SELECT u.id, u.login, b.name FROM bundles b JOIN users u ON u.id = b.owner_id
+	rows, err := s.db.Query(`SELECT u.id, u.login, u.kind, b.name FROM bundles b JOIN users u ON u.id = b.owner_id
 		WHERE u.login NOT LIKE '~%' AND NOT EXISTS (SELECT 1 FROM banned_users bu WHERE bu.user_id = u.id) AND (? = '' OR u.login = ? COLLATE NOCASE)
 		ORDER BY u.login, b.name LIMIT ? OFFSET ?`, owner, owner, limit, offset)
 	if err != nil {
@@ -314,7 +355,7 @@ func (s *Store) ListByOwner(owner string, limit, offset int) ([]Bundle, error) {
 	out := []Bundle{}
 	for rows.Next() {
 		var b Bundle
-		if err := rows.Scan(&b.Owner, &b.OwnerLogin, &b.Name); err != nil {
+		if err := rows.Scan(&b.Owner, &b.OwnerLogin, &b.OwnerKind, &b.Name); err != nil {
 			return nil, err
 		}
 		out = append(out, b)
@@ -324,29 +365,4 @@ func (s *Store) ListByOwner(owner string, limit, offset int) ([]Bundle, error) {
 
 type execer interface {
 	Exec(query string, args ...any) (sql.Result, error)
-}
-
-// upsertUser records that GitHub user id currently has login. GitHub logins
-// can be reassigned: any other id holding this login is tombstoned as
-// "~<id>" (which cannot match a URL owner) so logins stay unique.
-func upsertUser(x execer, id int64, login string) error {
-	if _, err := x.Exec(`UPDATE users SET login = '~' || id WHERE login = ? AND id != ?`, login, id); err != nil {
-		return err
-	}
-	_, err := x.Exec(`INSERT INTO users(id, login) VALUES(?, ?)
-		ON CONFLICT(id) DO UPDATE SET login = excluded.login`, id, login)
-	return err
-}
-
-// UpsertUser records the current login of a GitHub user.
-func (s *Store) UpsertUser(id int64, login string) error {
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if err := upsertUser(tx, id, login); err != nil {
-		return err
-	}
-	return tx.Commit()
 }

@@ -17,9 +17,11 @@ const purgeAfter = 30 * 24 * time.Hour
 
 // Token is a resolved, currently valid token.
 type Token struct {
-	ID         int64
-	UserID     int64
-	Login      string
+	ID     int64
+	UserID int64
+	Login  string
+	// Kind is the account's kind (KindUser or KindOrg); "" when unknown.
+	Kind       string
 	ExpiresAt  time.Time // zero = never expires
 	LastUsedAt time.Time // zero = never used
 	// Scope is "" for a full token, "publish" for a token that may only
@@ -103,10 +105,10 @@ func (s *Store) LookupToken(hash []byte) (Token, error) {
 		stored  []byte
 		exp, lu sql.NullInt64
 	)
-	err := s.db.QueryRow(`SELECT u.id, u.login, t.hash, COALESCE(t.id, 0), t.expires_at, t.last_used_at, t.scope, t.claims
+	err := s.db.QueryRow(`SELECT u.id, u.login, u.kind, t.hash, COALESCE(t.id, 0), t.expires_at, t.last_used_at, t.scope, t.claims
 		FROM tokens t JOIN users u ON u.id = t.user_id
 		WHERE t.hash = ? AND t.revoked_at IS NULL AND (t.expires_at IS NULL OR t.expires_at > ?)`,
-		hash, s.now().Unix()).Scan(&tk.UserID, &tk.Login, &stored, &tk.ID, &exp, &lu, &tk.Scope, &tk.Claims)
+		hash, s.now().Unix()).Scan(&tk.UserID, &tk.Login, &tk.Kind, &stored, &tk.ID, &exp, &lu, &tk.Scope, &tk.Claims)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Token{}, ErrNotFound
 	}

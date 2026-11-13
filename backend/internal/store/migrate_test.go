@@ -129,17 +129,17 @@ func schemaVersion(t *testing.T, db *sql.DB) int {
 func TestMigrateV1Database(t *testing.T) {
 	dir := t.TempDir()
 	makeV1(t, dir)
-	before := dumpRows(t, rawDB(t, dir), `SELECT * FROM users ORDER BY id`)
+	before := dumpRows(t, rawDB(t, dir), `SELECT id, login FROM users ORDER BY id`)
 
 	s, err := Open(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	db := s.db
-	if v := schemaVersion(t, db); v != len(migrations) || v != 8 {
-		t.Fatalf("schema_version = %d, want 8 (len(migrations)=%d)", v, len(migrations))
+	if v := schemaVersion(t, db); v != len(migrations) || v != 9 {
+		t.Fatalf("schema_version = %d, want 9 (len(migrations)=%d)", v, len(migrations))
 	}
-	if got := dumpRows(t, db, `SELECT * FROM users ORDER BY id`); !reflect.DeepEqual(got, before) {
+	if got := dumpRows(t, db, `SELECT id, login FROM users ORDER BY id`); !reflect.DeepEqual(got, before) {
 		t.Fatalf("users changed: %v vs %v", got, before)
 	}
 	var n int
@@ -177,7 +177,7 @@ func TestMigrateV1Database(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s2.Close()
-	if v := schemaVersion(t, s2.db); v != 8 {
+	if v := schemaVersion(t, s2.db); v != 9 {
 		t.Fatalf("version after reopen = %d", v)
 	}
 	if got := schemaDump(t, s2.db); !reflect.DeepEqual(got, afterFirst) {

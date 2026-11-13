@@ -127,7 +127,7 @@ func statsQuery(sort string) string {
 		SELECT d.owner_id AS owner_id, d.name AS name, SUM(d.count) AS c
 		FROM downloads d INDEXED BY downloads_day JOIN versions v ON v.owner_id = d.owner_id AND v.name = d.name AND v.version = d.version
 		WHERE d.day >= ? AND v.removed = 0 GROUP BY d.owner_id, d.name)
-	SELECT u.id, u.login, b.name,
+	SELECT u.id, u.login, u.kind, b.name,
 		(SELECT max(v.created_at) FROM versions v WHERE v.owner_id = b.owner_id AND v.name = b.name AND v.removed = 0) AS updated,
 		COALESCE(r.c, 0) AS dl
 	FROM bundles b JOIN users u ON u.id = b.owner_id
@@ -153,7 +153,7 @@ func (s *Store) ListStats(owner, sort string, limit, offset int) ([]BundleStat, 
 			b       BundleStat
 			updated sql.NullInt64
 		)
-		if err := rows.Scan(&b.Owner, &b.OwnerLogin, &b.Name, &updated, &b.Downloads30d); err != nil {
+		if err := rows.Scan(&b.Owner, &b.OwnerLogin, &b.OwnerKind, &b.Name, &updated, &b.Downloads30d); err != nil {
 			return nil, err
 		}
 		if updated.Valid {

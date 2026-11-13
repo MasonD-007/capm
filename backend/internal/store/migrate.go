@@ -28,6 +28,7 @@ var migrations = []migration{
 	migrateV6,
 	migrateV7,
 	migrateV8,
+	migrateV9,
 }
 
 // migrateV1 is the schema as it existed before migrations were introduced.
@@ -212,6 +213,41 @@ func migrateV8(tx *sql.Tx) error {
 ALTER TABLE tokens ADD COLUMN scope TEXT NOT NULL DEFAULT '';
 ALTER TABLE tokens ADD COLUMN claims TEXT NOT NULL DEFAULT '';
 ALTER TABLE versions ADD COLUMN published_via TEXT NOT NULL DEFAULT '';`)
+	return err
+}
+
+// migrateV9 adds organisation namespaces and verified repository links.
+//
+// users.kind: 'user' (every existing row, and every row a rolled-back release
+// inserts, since it omits the column) or 'org'. GitHub user ids and
+// organisation ids are one id space (both are "accounts"), which is why both
+// live in users; the store refuses to ever change a recorded id's kind.
+//
+// org_members is a time-limited record that user_id may publish under org_id
+// (see store.OrgMembershipTTL); it is rewritten at each `capm login --orgs`.
+// Its primary key leads with org_id (the authorisation lookup); org_members_user
+// serves "all of this user's records" (listing and replacing them).
+//
+// versions.published_by is the id of the acting user (NULL = unknown or a CI
+// token of an organisation; existing rows stay NULL, meaning "the owner").
+// versions.repo_verified is 1 only for a version published by a CI token whose
+// verified repository claim equals the manifest's metadata.repository.
+//
+// Pure ADD COLUMN with constant defaults plus new objects: no row is rewritten
+// and nothing is rebuilt.
+func migrateV9(tx *sql.Tx) error {
+	_, err := tx.Exec(`
+ALTER TABLE users ADD COLUMN kind TEXT NOT NULL DEFAULT 'user' CHECK (kind IN ('user', 'org'));
+CREATE TABLE org_members (
+	org_id     INTEGER NOT NULL,
+	user_id    INTEGER NOT NULL,
+	role       TEXT NOT NULL,
+	checked_at INTEGER NOT NULL,
+	PRIMARY KEY(org_id, user_id)
+);
+CREATE INDEX org_members_user ON org_members(user_id);
+ALTER TABLE versions ADD COLUMN published_by INTEGER;
+ALTER TABLE versions ADD COLUMN repo_verified INTEGER NOT NULL DEFAULT 0;`)
 	return err
 }
 

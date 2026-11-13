@@ -251,6 +251,12 @@ func (a *API) list(w http.ResponseWriter, r *http.Request) {
 		// severity, "" for none. Clients must recompute from the manifest.
 		RiskLabels []manifest.RiskLabel `json:"riskLabels"`
 		Risk       string               `json:"risk"`
+		// Repository is that version's manifest claim (metadata.repository),
+		// unverified; RepositoryVerified says the version was published by a
+		// GitHub Actions workflow of exactly that repository. Neither says
+		// anything about the bundle's contents.
+		Repository         string `json:"repository,omitempty"`
+		RepositoryVerified bool   `json:"repositoryVerified"`
 		// Downloads30d is the raw count of download requests for the bundle's
 		// non-removed versions over the last 30 UTC days. Anyone can inflate
 		// it; it is not a trust or quality signal and never affects search.
@@ -274,6 +280,7 @@ func (a *API) list(w http.ResponseWriter, r *http.Request) {
 			it.Latest, it.Description = v.Version, v.Manifest.Metadata.Description
 			it.RiskLabels = v.Manifest.RiskLabels()
 			it.Risk = manifest.HighestSeverity(it.RiskLabels)
+			it.Repository, it.RepositoryVerified = v.Manifest.Metadata.Repository, v.RepoVerified
 		}
 		return it, nil
 	}
@@ -360,9 +367,12 @@ func (a *API) versions(w http.ResponseWriter, r *http.Request) {
 		OwnerKind string            `json:"ownerKind"`
 		// PublishedBy is the login of the member who published a version of
 		// an organisation's bundle; absent for a user's own namespace.
-		PublishedBy string           `json:"publishedBy,omitempty"`
-		Summary     manifest.Summary `json:"summary"`
-		CreatedAt   time.Time        `json:"createdAt"`
+		PublishedBy string `json:"publishedBy,omitempty"`
+		// Repository and RepositoryVerified: see the list's fields.
+		Repository         string           `json:"repository,omitempty"`
+		RepositoryVerified bool             `json:"repositoryVerified"`
+		Summary            manifest.Summary `json:"summary"`
+		CreatedAt          time.Time        `json:"createdAt"`
 		// Removed versions stay listed (their number can never be reused)
 		// but their manifest is withheld: a takedown may be about its content.
 		Removed       bool   `json:"removed"`
@@ -387,7 +397,7 @@ func (a *API) versions(w http.ResponseWriter, r *http.Request) {
 		if v.Removed {
 			m = manifest.Manifest{}
 		}
-		out = append(out, item{Version: v.Version, Digest: v.Digest, Yanked: v.Yanked, Manifest: m, OwnerKind: v.OwnerKind, PublishedBy: v.PublishedBy, Summary: m.EnforcedSummary(), CreatedAt: v.CreatedAt, Removed: v.Removed, RemovedReason: v.RemovedReason, Downloads: dl[v.Version].Total, Downloads30d: dl[v.Version].Last30d, PublishedVia: publishedVia(v.PublishedVia)})
+		out = append(out, item{Version: v.Version, Digest: v.Digest, Yanked: v.Yanked, Manifest: m, OwnerKind: v.OwnerKind, PublishedBy: v.PublishedBy, Repository: m.Metadata.Repository, RepositoryVerified: v.RepoVerified && !v.Removed, Summary: m.EnforcedSummary(), CreatedAt: v.CreatedAt, Removed: v.Removed, RemovedReason: v.RemovedReason, Downloads: dl[v.Version].Total, Downloads30d: dl[v.Version].Last30d, PublishedVia: publishedVia(v.PublishedVia)})
 	}
 	writeJSON(w, 200, out)
 }
@@ -420,6 +430,10 @@ func (a *API) metadata(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := map[string]any{"ownerId": pick.OwnerID, "ownerKind": pick.OwnerKind, "version": pick.Version, "digest": pick.Digest, "yanked": pick.Yanked, "manifest": pick.Manifest, "summary": pick.Manifest.EnforcedSummary(), "riskLabels": pick.Manifest.RiskLabels(), "createdAt": pick.CreatedAt}
+	out["repositoryVerified"] = pick.RepoVerified
+	if r := pick.Manifest.Metadata.Repository; r != "" {
+		out["repository"] = r
+	}
 	// Raw request counts for this version (not a trust signal).
 	dl, err := a.store.VersionDownloads(r.PathValue("owner"), r.PathValue("name"))
 	if err != nil {

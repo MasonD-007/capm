@@ -175,6 +175,18 @@ func (s *Store) PublishAs(ownerID int64, ownerLogin, name, version string, tarba
 		return err
 	}
 
+	// "Verified" means exactly this: the version was published by a CI token
+	// whose certified repository (recorded in via when the token was minted
+	// from a verified ID token) is the repository the manifest names. It says
+	// where the version was published from, nothing about its contents.
+	verified := 0
+	if pm.Via != "" {
+		var rec map[string]string
+		if json.Unmarshal([]byte(pm.Via), &rec) == nil && manifest.RepositoryMatches(m.Metadata.Repository, rec["repository"]) {
+			verified = 1
+		}
+	}
+
 	readme, err := readReadme(tmp)
 	if err != nil {
 		return err
@@ -236,8 +248,8 @@ func (s *Store) PublishAs(ownerID int64, ownerLogin, name, version string, tarba
 	if err := s.checkQuota(tx, ownerID, name, "sha256:"+hexsum, int64(len(tarball))); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`INSERT INTO versions(owner_id, name, version, digest, manifest, created_at, size, readme, published_via, published_by)
-		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, ownerID, name, version, "sha256:"+hexsum, string(mj), s.now().Unix(), len(tarball), readme, via, pm.PublishedBy); err != nil {
+	if _, err := tx.Exec(`INSERT INTO versions(owner_id, name, version, digest, manifest, created_at, size, readme, published_via, published_by, repo_verified)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, ownerID, name, version, "sha256:"+hexsum, string(mj), s.now().Unix(), len(tarball), readme, via, pm.PublishedBy, verified); err != nil {
 		if isUnique(err) {
 			return ErrVersionExists
 		}

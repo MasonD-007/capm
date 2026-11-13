@@ -49,6 +49,12 @@ func (m *Manifest) Validate() error {
 	for i, a := range m.Metadata.Authors {
 		noCtl(fmt.Sprintf("metadata.authors[%d]", i), a)
 	}
+	noCtl("metadata.repository", m.Metadata.Repository)
+	if m.Metadata.Repository != "" {
+		if _, _, ok := ParseRepository(m.Metadata.Repository); !ok {
+			add("metadata.repository %q must be https://github.com/<owner>/<repo> exactly (no trailing slash, .git, query or fragment)", DisplaySafe(m.Metadata.Repository))
+		}
+	}
 	noCtl("base.agent", m.Base.Agent)
 	noCtl("base.version", m.Base.Version)
 	if m.Base.Version == "" || strings.IndexFunc(m.Base.Version, unicode.IsSpace) >= 0 {

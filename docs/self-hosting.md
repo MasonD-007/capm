@@ -643,6 +643,41 @@ prereleases accumulate (one per merge); there is no automatic cleanup, so prune
 old `cli-*` prereleases by hand when the list gets long. Never delete the
 release currently marked latest.
 
+### Homebrew tap
+
+A release tag also updates the Homebrew tap, `MasonD-007/homebrew-capm`, so
+users can `brew install masond-007/capm/capm`. The workflow's `homebrew` job
+does it after the release is published, and it is a clean no-op until the owner
+has done this one-time setup:
+
+1. Create the public repository `MasonD-007/homebrew-capm` (default branch
+   `main`) with a `Formula/` directory (a README is enough to create it; the
+   workflow creates `Formula/capm.rb`).
+2. Create a fine-grained personal access token whose only repository is
+   `MasonD-007/homebrew-capm`, with **Contents: read and write**, and nothing
+   else. Give it an expiry you will remember to renew.
+3. Add it to this repository's Actions secrets as `HOMEBREW_TAP_TOKEN`.
+
+On each plain `vX.Y.Z` tag (never on a `vX.Y.Z-rc.1`-style prerelease tag) the
+job downloads the published `checksums.txt`, generates the formula with
+`scripts/homebrew-formula.sh <version> checksums.txt`, clones the tap with the
+token, writes `Formula/capm.rb`, commits `capm <version>` if the file changed
+and pushes. It never moves the tap to an older version (re-running an old tag
+leaves a newer formula alone). Without the secret the job succeeds and prints a
+notice; if the clone or push fails the job fails with a message, but the release
+itself, built and published by the earlier job, is unaffected: fix the tap or
+the token and re-run the failed job.
+
+To verify the first time (on a Mac or Linux box with Homebrew):
+
+```sh
+brew install masond-007/capm/capm   # taps MasonD-007/homebrew-capm on first use
+capm version                        # capm X.Y.Z
+brew test capm                      # runs the formula's test: capm version contains the version
+brew audit --strict masond-007/capm/capm
+ls "$(brew --prefix)/etc/bash_completion.d/capm" "$(brew --prefix)/share/zsh/site-functions/_capm" "$(brew --prefix)/share/fish/vendor_completions.d/capm.fish"
+```
+
 ## Rollback
 
 Rollouts are commits, so a rollback is a revert. Find the deploy commit and

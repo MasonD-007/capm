@@ -26,6 +26,9 @@ jobs:
   release:
     name: Build and Publish Tagged CLI
     runs-on: ubuntu-latest
+    outputs:
+      kind: ${{ steps.tag.outputs.kind }}
+      version: ${{ steps.tag.outputs.version }}
     env:
       TAG: ${{ github.ref_name }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -36,11 +39,15 @@ jobs:
           fetch-depth: 0
 
       - name: Check the tag
+        id: tag
         run: |
           set -eu
           kind="$(bash scripts/release-tag.sh classify "${TAG}")"
+          version="$(bash scripts/release-tag.sh version "${TAG}")"
           echo "KIND=${kind}" >> "$GITHUB_ENV"
-          echo "VERSION=$(bash scripts/release-tag.sh version "${TAG}")" >> "$GITHUB_ENV"
+          echo "VERSION=${version}" >> "$GITHUB_ENV"
+          echo "kind=${kind}" >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
           git fetch origin main:refs/remotes/origin/main
           bash scripts/release-tag.sh check-main "${TAG}"
 
@@ -77,3 +84,95 @@ jobs:
             --notes "capm CLI ${VERSION}. Install: curl -fsSL https://capm.masondrake.dev/install.sh | sh  (or run capm self-update)" \
             dist/capm-darwin-amd64 dist/capm-darwin-arm64 \
             dist/capm-linux-amd64 dist/capm-linux-arm64 dist/checksums.txt
+
+  # Updates the Homebrew tap (MasonD-007/homebrew-capm, Formula/capm.rb) once
+  # the release above is published. A separate job on purpose: if the tap push
+  # fails, this job fails but the release stays published. Prerelease tags
+  # (vX.Y.Z-rc.1 ...) never touch the tap, and with no HOMEBREW_TAP_TOKEN secret
+  # (the tap repository does not exist until the owner creates it) every step
+  # after the first is skipped and the job succeeds with a notice.
+  homebrew:
+    name: Update Homebrew tap
+    needs: release
+    if: needs.release.outputs.kind == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      TAG: ${{ github.ref_name }}
+      VERSION: ${{ needs.release.outputs.version }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Check for the tap token
+        id: gate
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          set -eu
+          if [ -z "${TAP_TOKEN}" ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Homebrew tap not updated::The HOMEBREW_TAP_TOKEN secret is not set, so capm ${VERSION} was not published to MasonD-007/homebrew-capm. The release itself is unaffected. See docs/self-hosting.md (Cutting a CLI release)."
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.enabled == 'true'
+        with:
+          persist-credentials: false
+
+      - name: Generate the formula
+        if: steps.gate.outputs.enabled == 'true'
+        run: |
+          set -eu
+          mkdir -p tap-work
+          # The checksums of the assets that were just published, not a rebuild.
+          gh release download "${TAG}" --repo "${GITHUB_REPOSITORY}" --pattern checksums.txt --dir tap-work --clobber
+          bash scripts/homebrew-formula.sh "${VERSION}" tap-work/checksums.txt > tap-work/capm.rb
+          cat tap-work/capm.rb
+
+      - name: Push the formula to the tap
+        if: steps.gate.outputs.enabled == 'true'
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          set -eu
+          # The token travels as an HTTP header (never in a URL or a remote, so
+          # it is not stored in the clone's config). Actions masks the secret;
+          # the derived header value is masked explicitly.
+          auth="$(printf 'x-access-token:%s' "${TAP_TOKEN}" | base64 | tr -d '\n')"
+          echo "::add-mask::${auth}"
+          gitx() { git -c "http.extraheader=AUTHORIZATION: basic ${auth}" "$@"; }
+          fail() {
+            echo "::error title=Homebrew tap push failed::$1 The release ${TAG} is published and unaffected; fix the tap or the HOMEBREW_TAP_TOKEN secret, then re-run this job."
+            exit 1
+          }
+          gitx clone --quiet https://github.com/MasonD-007/homebrew-capm.git tap >/dev/null 2>&1 \
+            || fail "Could not clone MasonD-007/homebrew-capm (does it exist, and can the token read it?)."
+          cd tap
+          if git rev-parse --verify --quiet HEAD >/dev/null; then
+            branch="$(git rev-parse --abbrev-ref HEAD)"
+          else
+            branch=main
+            git checkout --quiet -B "${branch}"
+          fi
+          # Never move the tap backwards (for example when an older tag is re-run).
+          current="$(sed -n 's/^  version "\(.*\)"$/\1/p' Formula/capm.rb 2>/dev/null | head -n 1)"
+          if [ -n "${current}" ] && [ "${current}" != "${VERSION}" ] \
+            && [ "$(printf '%s\n%s\n' "${current}" "${VERSION}" | sort -V | tail -n 1)" = "${current}" ]; then
+            echo "::notice title=Homebrew tap not updated::The tap already has capm ${current}, which is newer than ${VERSION}."
+            exit 0
+          fi
+          mkdir -p Formula
+          cp ../tap-work/capm.rb Formula/capm.rb
+          if [ -z "$(git status --porcelain -- Formula/capm.rb)" ]; then
+            echo "Formula/capm.rb is already up to date for ${VERSION}."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/capm.rb
+          git commit --quiet -m "capm ${VERSION}"
+          gitx push --quiet origin "HEAD:refs/heads/${branch}" >/dev/null 2>&1 \
+            || fail "Could not push to MasonD-007/homebrew-capm (does the token have contents read/write on that repository?)."
+          echo "Published capm ${VERSION} to MasonD-007/homebrew-capm (${branch})."

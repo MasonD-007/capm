@@ -1,0 +1,6 @@
+messageSignature bundle (Rekor v1 inclusion proof + SET, SCT, GCP SA):
+runs=20 median=11.9ms min=11.2ms max=14.0ms
+DSSE bundle, GitHub Actions identity + owner id:
+runs=20 median=12.8ms min=11.5ms max=19.7ms
+baseline: process start of the same binary with bad flag (exec + runtime init only)
+median=9.6ms

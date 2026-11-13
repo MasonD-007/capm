@@ -1,0 +1,7 @@
+fetched trusted_root.json: 6787 bytes in 890.098791ms (cold cache)
+  tuf tuf-repo-cdn.sigstore.dev/root.json      version=16 expires=2027-04-22T19:27:31Z
+  tuf tuf-repo-cdn.sigstore.dev/snapshot.json  version=166 expires=2036-10-04T08:51:19Z
+  cache file tuf-repo-cdn.sigstore.dev/targets/trusted_root.json (6787 bytes)
+  tuf tuf-repo-cdn.sigstore.dev/targets.json   version=14 expires=2036-05-09T09:00:52Z
+  tuf tuf-repo-cdn.sigstore.dev/timestamp.json version=833 expires=2026-11-19T19:19:46Z
+  cache file tuf-repo-cdn.sigstore.dev.json (52 bytes)

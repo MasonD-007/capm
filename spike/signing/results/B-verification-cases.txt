@@ -1,0 +1,89 @@
+===== Case 1: messageSignature bundle, GCP service-account identity (cosign v3.1.4 release)
+--- 1.1 valid
+OK  san=keyless@projectsigstore.iam.gserviceaccount.com
+    issuer=https://accounts.google.com
+    repo=
+    ownerId=
+    signer=
+    verify-time(excluding artifact hashing)~81.731208ms
+exit=0
+--- 1.2 wrong digest
+FAIL: failed to verify signature: artifact does not match digest
+exit=1
+--- 1.3 wrong SAN
+FAIL: failed to verify certificate identity: no matching CertificateIdentity found, last error: expected SAN value to match regex "^someone@example\.com$", got "keyless@projectsigstore.iam.gserviceaccount.com"
+exit=1
+--- 1.4 wrong issuer
+FAIL: failed to verify certificate identity: no matching CertificateIdentity found, last error: expected issuer value "https://token.actions.githubusercontent.com", got "https://accounts.google.com"
+exit=1
+--- 1.5 default Actions policy (owner=sigstore) must reject a non-Actions cert
+FAIL: failed to verify certificate identity: no matching CertificateIdentity found, last error: expected SAN value to match regex "^https://github\.com/sigstore/[^/]+/\.github/workflows/[^@]+@.+$", got "keyless@projectsigstore.iam.gserviceaccount.com"
+exit=1
+--- 1.6 tamper-signature
+FAIL: failed to verify log inclusion: transparency log signature does not match
+exit=1
+--- 1.6 tamper-certificate
+FAIL: failed to verify log inclusion: transparency log certificate does not match
+exit=1
+--- 1.6 tamper-inclusion-proof
+FAIL: failed to verify log inclusion: calculated root:
+[0 208 142 103 201 72 143 153 76 82 161 106 122 69 144 231 23 17 219 226 224 94 169 177 210 160 247 33 4 250 27 61]
+ does not match expected root:
+[143 41 76 37 149 228 89 44 75 194 205 133 0 123 39 126 242 227 30 133 100 244 199 155 96 141 136 151 220 130 9 15]
+exit=1
+--- 1.6 tamper-set
+FAIL: failed to verify log inclusion: not enough verified log entries from transparency log: 0 < 1
+exit=1
+--- 1.6 strip-tlog
+FAIL: failed to verify log inclusion: not enough verified log entries from transparency log: 0 < 1
+exit=1
+===== Case 2: DSSE bundle from a GitHub Actions workflow (sigstore-js, sigstore-go fixture), sha512 subject
+--- 2.1 valid, owner=sigstore + owner-id 71096353
+OK  san=https://github.com/sigstore/sigstore-js/.github/workflows/release.yml@refs/heads/main
+    issuer=https://token.actions.githubusercontent.com
+    repo=https://github.com/sigstore/sigstore-js
+    ownerId=71096353
+    signer=https://github.com/sigstore/sigstore-js/.github/workflows/release.yml@refs/heads/main
+    verify-time(excluding artifact hashing)~3.432125ms
+exit=0
+--- 2.2 valid, owner id not checked
+OK  san=https://github.com/sigstore/sigstore-js/.github/workflows/release.yml@refs/heads/main
+    issuer=https://token.actions.githubusercontent.com
+    repo=https://github.com/sigstore/sigstore-js
+    ownerId=71096353
+    signer=https://github.com/sigstore/sigstore-js/.github/workflows/release.yml@refs/heads/main
+    verify-time(excluding artifact hashing)~3.422542ms
+exit=0
+--- 2.3 wrong digest
+FAIL: failed to verify signature: provided artifact digest does not match any digest in statement
+exit=1
+--- 2.4 wrong owner login (attacker-owned repo shape)
+FAIL: failed to verify certificate identity: no matching CertificateIdentity found, last error: expected SAN value to match regex "^https://github\.com/evil/[^/]+/\.github/workflows/[^@]+@.+$", got "https://github.com/sigstore/sigstore-js/.github/workflows/release.yml@refs/heads/main"
+exit=1
+--- 2.5 login prefix trick: owner=sig
+FAIL: failed to verify certificate identity: no matching CertificateIdentity found, last error: expected SAN value to match regex "^https://github\.com/sig/[^/]+/\.github/workflows/[^@]+@.+$", got "https://github.com/sigstore/sigstore-js/.github/workflows/release.yml@refs/heads/main"
+exit=1
+--- 2.6 right login, wrong numeric owner id (login-reassignment case)
+FAIL: failed to verify certificate identity: no matching CertificateIdentity found, last error: expected SourceRepositoryOwnerIdentifier to be "71096354", got "71096353"
+exit=1
+--- 2.7 wrong issuer
+FAIL: failed to verify certificate identity: no matching CertificateIdentity found, last error: expected issuer value "https://accounts.google.com", got "https://token.actions.githubusercontent.com"
+exit=1
+--- 2.8 tamper-signature
+FAIL: failed to verify log inclusion: transparency log signature does not match
+exit=1
+--- 2.8 tamper-certificate
+FAIL: failed to verify log inclusion: transparency log certificate does not match
+exit=1
+--- 2.8 tamper-inclusion-proof
+FAIL: failed to verify log inclusion: calculated root:
+[41 88 105 44 77 71 247 139 90 234 9 16 51 123 241 163 198 113 131 26 218 141 52 20 227 183 140 131 148 59 114 226]
+ does not match expected root:
+[191 238 224 58 125 112 162 241 199 40 17 21 139 50 121 20 88 19 41 64 66 55 213 49 46 142 74 67 82 115 241 204]
+exit=1
+--- 2.8 tamper-set
+FAIL: failed to verify log inclusion: not enough verified log entries from transparency log: 0 < 1
+exit=1
+--- 2.8 strip-tlog
+FAIL: failed to verify log inclusion: not enough verified log entries from transparency log: 0 < 1
+exit=1

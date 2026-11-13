@@ -1,0 +1,5 @@
+target             capm-cli   empty-main empty+verifier
+darwin/amd64        8528560      1871744     19108080
+darwin/arm64        7835282      1791490     17981426
+linux/amd64         8368288      1835168     18550944
+linux/arm64         7667872      1835168     17432736

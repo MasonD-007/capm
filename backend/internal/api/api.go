@@ -362,6 +362,10 @@ func (a *API) versions(w http.ResponseWriter, r *http.Request) {
 		// version, whose history is kept but not shown.
 		Downloads    int64 `json:"downloads"`
 		Downloads30d int64 `json:"downloads30d"`
+		// PublishedVia is recorded provenance from the CI token that
+		// published the version (repository, workflow ref, commit); absent
+		// for every other version. It is not a verified-publisher mark.
+		PublishedVia map[string]string `json:"publishedVia,omitempty"`
 	}
 	dl, err := a.store.VersionDownloads(r.PathValue("owner"), r.PathValue("name"))
 	if err != nil {
@@ -374,7 +378,7 @@ func (a *API) versions(w http.ResponseWriter, r *http.Request) {
 		if v.Removed {
 			m = manifest.Manifest{}
 		}
-		out = append(out, item{v.Version, v.Digest, v.Yanked, m, m.EnforcedSummary(), v.CreatedAt, v.Removed, v.RemovedReason, dl[v.Version].Total, dl[v.Version].Last30d})
+		out = append(out, item{v.Version, v.Digest, v.Yanked, m, m.EnforcedSummary(), v.CreatedAt, v.Removed, v.RemovedReason, dl[v.Version].Total, dl[v.Version].Last30d, publishedVia(v.PublishedVia)})
 	}
 	writeJSON(w, 200, out)
 }
@@ -414,6 +418,9 @@ func (a *API) metadata(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out["downloads"], out["downloads30d"] = dl[pick.Version].Total, dl[pick.Version].Last30d
+	if pv := publishedVia(pick.PublishedVia); pv != nil {
+		out["publishedVia"] = pv
+	}
 	// The README is author-supplied, unverified text. It is only on this
 	// per-version endpoint (never in lists, for size) and omitted when empty.
 	readme, err := a.store.Readme(r.PathValue("owner"), r.PathValue("name"), pick.Version)
@@ -485,7 +492,7 @@ func (a *API) publish(w http.ResponseWriter, r *http.Request) {
 	// A publish rejected by a quota still counts against the hourly allowance
 	// (Allow above already recorded it). Refunding it would let a user parked
 	// at their limit upload and have unpacked 5 MiB bodies without bound.
-	err = a.store.Publish(id, login, name, version, body)
+	err = a.store.PublishVia(id, login, name, version, body, viaRecord(tk))
 	var qe *store.QuotaError
 	switch {
 	case err == nil:
@@ -527,6 +534,47 @@ func (a *API) yank(yanked bool) http.HandlerFunc {
 			internal(w, err)
 		}
 	}
+}
+
+// viaRecord is the compact JSON provenance stored with a version published by
+// a CI token ("" for any other token): only these claims, only strings,
+// taken from the claims recorded when the token was minted from a verified ID
+// token. It is recorded provenance, not an endorsement.
+func viaRecord(tk store.Token) string {
+	if tk.Scope != ScopePublish || tk.Claims == "" {
+		return ""
+	}
+	var claims map[string]string
+	if json.Unmarshal([]byte(tk.Claims), &claims) != nil {
+		return ""
+	}
+	rec := map[string]string{}
+	for _, k := range []string{"repository", "repository_id", "workflow_ref", "sha", "run_id"} {
+		if v := claims[k]; v != "" {
+			rec[k] = v
+		}
+	}
+	if len(rec) == 0 {
+		return ""
+	}
+	b, err := json.Marshal(rec)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// publishedVia renders a stored provenance record for the API, or nil when
+// the version was not published with a CI token.
+func publishedVia(raw string) map[string]string {
+	if raw == "" {
+		return nil
+	}
+	var rec map[string]string
+	if json.Unmarshal([]byte(raw), &rec) != nil {
+		return nil
+	}
+	return map[string]string{"repository": rec["repository"], "workflowRef": rec["workflow_ref"], "sha": rec["sha"]}
 }
 
 // resolve picks a version: range=latest (the default) is the highest semver

@@ -51,6 +51,10 @@ type oidcEnv struct {
 }
 
 func newOIDCEnv(t *testing.T, ttl time.Duration) *oidcEnv {
+	return newOIDCEnvCfg(t, ttl, api.Config{})
+}
+
+func newOIDCEnvCfg(t *testing.T, ttl time.Duration, apiCfg api.Config) *oidcEnv {
 	t.Helper()
 	e := &oidcEnv{kid: "kid-1", accounts: map[int64][2]string{42: {"alice", "User"}, 77: {"acme", "Organization"}, 43: {"bob", "User"}}}
 	var err error
@@ -98,7 +102,8 @@ func newOIDCEnv(t *testing.T, ttl time.Duration) *oidcEnv {
 	t.Cleanup(func() { st.Close() })
 	svc := auth.New(st, auth.Config{ClientID: "cid", APIURL: e.apiSrv.URL, OAuthURL: e.apiSrv.URL, TokenTTL: ttl,
 		OIDC: &auth.OIDCConfig{Issuer: oidcIssuer, JWKSURL: e.jwks.URL + "/.well-known/jwks", Audience: oidcAudience}})
-	reg := api.NewWithConfig(st, svc.Authenticate, api.Config{IsAdmin: svc.IsAdmin, AuthDetail: svc.AuthenticateDetail})
+	apiCfg.IsAdmin, apiCfg.AuthDetail = svc.IsAdmin, svc.AuthenticateDetail
+	reg := api.NewWithConfig(st, svc.Authenticate, apiCfg)
 	mux := http.NewServeMux()
 	mux.Handle("/v1/auth/", svc.Handler())
 	mux.Handle("/v1/", reg.Handler())

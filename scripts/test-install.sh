@@ -203,6 +203,32 @@ else
   echo "SKIP: dash not installed"
 fi
 
+echo "== 8. completions hint (stderr only; no rc file is touched)"
+# run_install merges stderr into $WORK/out; HOME is a scratch dir so any rc
+# edit would show up there. The fake binary only answers "version", so the
+# installer must not call "capm completion".
+hint_case() { # hint_case <label> <SHELL value> <expected text> <forbidden text>
+  local label="$1" sh_val="$2" want="$3" nope="$4"
+  local d="$WORK/i8-$label" home="$WORK/home-$label"
+  mkdir -p "$home"
+  RC=0
+  HOME="$home" SHELL="$sh_val" CAPM_DOWNLOAD_BASE="http://127.0.0.1:$PORT/happy" CAPM_INSTALL_DIR="$d" \
+    sh "$INSTALL_SH" >"$WORK/out" 2>&1 || RC=$?
+  check "$label: exit 0" rc_zero
+  check "$label: hint says '$want'" out_has "$want"
+  if [ -n "$nope" ]; then check "$label: hint does not mention '$nope'" not_out_has "$nope"; fi
+  check "$label: exactly one hint line" test "$(grep -c -i 'completion' "$WORK/out")" = 1
+  check "$label: HOME untouched (no rc edits)" no_leftovers "$home"
+  check "$label: installed binary still works" runs_ok "$d/capm"
+}
+not_out_has() { ! grep -q -- "$1" "$WORK/out"; }
+hint_case bash /bin/bash "source <(capm completion bash)" "completion zsh"
+hint_case zsh /usr/bin/zsh "source <(capm completion zsh)" "completion bash"
+hint_case fish /opt/homebrew/bin/fish "capm completion fish >" "completion zsh"
+hint_case unknown /bin/tcsh "capm completion" "source <("
+hint_case noshell "" "capm completion" "source <("
+check "hint goes to stderr, not stdout" test -z "$(HOME="$WORK/home-bash" SHELL=/bin/bash CAPM_DOWNLOAD_BASE="http://127.0.0.1:$PORT/happy" CAPM_INSTALL_DIR="$WORK/i8-out" sh "$INSTALL_SH" 2>/dev/null)"
+
 echo
 if [ "$FAILS" -ne 0 ]; then
   echo "$FAILS check(s) FAILED"

@@ -110,6 +110,15 @@ main() {
     info "warning: '${dest} version' failed: ${ver}"
   fi
 
+  # One line telling the user how to turn on tab completion for their shell.
+  # It only prints; it never edits an rc file (and never runs the binary).
+  case "${SHELL:-}" in
+    */bash|bash) info "Tab completion (bash): add  source <(capm completion bash)  to ~/.bashrc" ;;
+    */zsh|zsh) info "Tab completion (zsh): add  source <(capm completion zsh)  to ~/.zshrc, after compinit" ;;
+    */fish|fish) info "Tab completion (fish): run  capm completion fish > ~/.config/fish/completions/capm.fish" ;;
+    *) info "Tab completion: run  capm completion  to see how to enable it for bash, zsh or fish" ;;
+  esac
+
   case ":${PATH:-}:" in
     *":${install_dir}:"*) ;;
     *)

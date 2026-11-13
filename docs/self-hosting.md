@@ -538,6 +538,31 @@ it. The URL is never logged, only its host. An `http://` or `https://` value is
 required or the backend refuses to start. After changing it, restart the
 backend.
 
+## Publish from CI (OIDC)
+
+`POST /v1/auth/oidc` lets a GitHub Actions workflow exchange its OIDC token for
+a 15 minute, publish-only registry token (see
+[security-notes.md](security-notes.md#publishing-from-github-actions-oidc)). It
+is on by default with GitHub's settings and needs nothing in the ConfigMap. The
+backend variables (all optional; invalid values make it refuse to start):
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `OIDC_ISSUER` | `https://token.actions.githubusercontent.com` | the exact `iss` the tokens must carry. **Set but empty disables the endpoint** (it answers 404). `https` only (plain `http` only for localhost) |
+| `OIDC_JWKS_URL` | `<issuer>/.well-known/jwks` | where the issuer's signing keys are fetched; override for GitHub Enterprise or tests. Never taken from the token |
+| `OIDC_AUDIENCE` | `https://capm.masondrake.dev` | the exact `aud` the workflow must request; the CLI and the Action use the registry URL, so set this to your registry's public URL when self-hosting. An explicitly empty value refuses to start |
+
+To disable the feature set `OIDC_ISSUER` to an empty value in the backend's
+environment (for k3s: `OIDC_ISSUER: ""` in the ConfigMap, then restart the
+backend; leaving it unset keeps the default, which is on). The startup log says
+which it is. The endpoint is covered by the per-IP auth limit
+(`AUTH_RATE_PER_MINUTE`). The owner-type lookup calls `GET /user/<id>` on
+`GITHUB_API_URL` unauthenticated, so GitHub's anonymous limit (60 an hour per
+server IP) applies to distinct owners not seen in the last 2 minutes; a failed
+lookup is a 503 for that exchange. Every refusal logs one line
+(`auth: oidc exchange refused: reason=... repository=...`, the unverified
+repository claim only, never the token).
+
 ## Before deploying a release that migrates the database
 
 The backend applies schema migrations when it starts, so a merge to `main` that
@@ -551,7 +576,18 @@ kubectl -n capm logs -f job/backup-pre-migrate     # wait for it to finish
 kubectl -n capm delete job backup-pre-migrate      # afterwards
 ```
 
-**This release (schema version 7) migrates again, for abuse reports (step
+**This release (schema version 8) migrates again, for publishing from CI (step
+8).** It adds three columns, all `TEXT NOT NULL DEFAULT ''` and each a plain
+`ALTER TABLE ... ADD COLUMN`: `tokens.scope` (empty = a full token, what every
+existing token is), `tokens.claims` and `versions.published_via` (empty = no CI
+provenance). No row is rewritten and no table is rebuilt, so the step is quick.
+**Take the backup above first (this is the pre-migration snapshot for step
+8).** A release older than 8 refuses to start on a version-8 database ("newer
+than this server supports"), so a rollback needs the pre-migration snapshot;
+CI tokens and CI provenance created since the deploy are lost with it. See
+[Publish from CI](#publish-from-ci-oidc).
+
+**Schema version 7 migrated for abuse reports (step
 7).** It adds one table, `reports`, and two indexes on it (`reports_open`, a
 partial index over unresolved reports, newest first; `reports_dedup` over
 owner, name, reporter key and time). No existing table changes, so the step is

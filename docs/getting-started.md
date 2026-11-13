@@ -231,6 +231,63 @@ flagged file really is meant to be public, `capm push --allow-secret-files`
 turns the `secret_file` error into a warning. The other rules are not run by
 `push`.
 
+### Publish from GitHub Actions
+
+A workflow can publish a bundle without any stored secret: the job asks GitHub
+for a short-lived identity token (OIDC), the registry checks it and hands back
+a token that lasts 15 minutes and can do one thing, publish under the
+repository owner's login.
+
+```yaml
+# .github/workflows/publish.yml in YOUR repository
+name: Publish bundle
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read    # to check the code out
+  id-token: write   # lets the job request an OIDC token; without it the action stops and says so
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Pin to a commit SHA, not a branch, so the action cannot change under you.
+      - uses: MasonD-007/capm/.github/actions/publish@<commit-sha>
+        with:
+          directory: .          # where capm.yaml is
+          strict: 'true'        # capm lint --strict: warnings (including a version that is not new) fail the job
+          # registry: https://capm.masondrake.dev
+          # version: latest     # capm CLI release: "latest" or a tag such as cli-<sha>
+```
+
+Things to know:
+
+- The bundle is published as `<owner>/<name>` where the owner is the GitHub
+  **user** who owns the repository, and `name` and `version` come from
+  `capm.yaml`. Bump `metadata.version` for each release; a version that exists
+  is refused. **Organisation-owned repositories are refused** ("organisation
+  namespaces are not supported yet").
+- Workflows triggered by `pull_request` or `pull_request_target` (and the other
+  `pull_request_*` events) cannot publish: the registry refuses their tokens.
+  Use `push`, `release`, `workflow_dispatch` or `schedule`.
+- The action installs the CLI with the public installer, runs `capm login
+  --oidc`, `capm lint` (online, so `version_not_bumped` works) and `capm push`.
+  Lint, quotas and rate limits apply exactly as for a normal publish. See
+  [security-notes.md](security-notes.md#publishing-from-github-actions-oidc) for
+  what this does and does not prove.
+- Each CI publish records where it came from (repository, workflow file and
+  ref, commit) next to the version; `GET /v1/bundles/{owner}/{name}/{version}`
+  shows it as `publishedVia`. That is recorded provenance, not an endorsement.
+- Without the action: `CAPM_TOKEN=$(capm login --oidc)` inside a job with
+  `id-token: write`, then `CAPM_OWNER=<login> capm push .`. `capm login --oidc`
+  prints only the token on stdout and stores nothing.
+- Your CI tokens show up in `capm tokens` as `ci:<repository>` with a 15 minute
+  expiry; `capm tokens revoke <id>` ends one early.
+
 ### What capm remembers
 
 For every registry bundle you pull or run, capm keeps a record in
@@ -282,6 +339,8 @@ so update the CLI before relying on it.
 | Variable | Used by | Meaning |
 |---|---|---|
 | `CAPM_REGISTRY` | all | registry base URL (default `https://capm.masondrake.dev`; set `http://localhost:8080` for local development) |
+| `CAPM_TOKEN` | all that sign in | a registry token to use instead of the stored login, for CI (see "Publish from GitHub Actions"). Never written to disk; `capm logout` leaves the stored login alone when it is set |
+| `CAPM_OWNER` | push, lint | with `CAPM_TOKEN`: the GitHub login the token publishes as (a publish-only CI token cannot be asked who it is) |
 | `CAPM_MODEL_URL` | run | your model endpoint, an https URL on port 443 (or `--model-url`) |
 | `CAPM_MODEL_KEY` | run | key for that endpoint (or `--model-key`, which other processes can see) |
 | `CAPM_MODEL` | run | model id; required for OpenCode (or `--model`) |

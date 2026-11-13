@@ -9,5 +9,11 @@ data:
   # GitHub OAuth app client ID (Device Flow). Not a secret.
   GITHUB_CLIENT_ID: "Ov23liCnajYhhBuGathD"
   TRUSTED_PROXY: "true"
+  # Checked on 2026-11-13 with a header-echo pod behind this hostname:
+  # X-Forwarded-For arrives as a cluster-internal address (10.42.0.1) for every
+  # visitor, while Cloudflare's CF-Connecting-IP carries the real client IP.
+  # Rate limits key on this header. It is trusted blindly, which is safe only
+  # because the backend is reachable solely through the Cloudflare tunnel.
+  CLIENT_IP_HEADER: CF-Connecting-IP
   # GitHub numeric ids allowed to use /v1/admin/* (MasonD-007). Not a secret.
   ADMIN_GITHUB_IDS: "139420415"

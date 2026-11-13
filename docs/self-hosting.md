@@ -89,17 +89,19 @@ These steps cannot be done from the repo. `<...>` marks values you supply.
 
 ### Client IP header
 
-The backend rate-limits auth requests per client IP. With `TRUSTED_PROXY=true`
-it uses the rightmost `X-Forwarded-For` entry, which behind Cloudflare, the
-tunnel connector and Traefik may be the connector rather than the visitor,
-putting everyone in one bucket. Check what actually arrives (a throwaway
-`traefik/whoami` pod behind a temporary Ingress on a spare path) before
-changing anything. If the rightmost `X-Forwarded-For` entry is not the
-caller's public IP and `Cf-Connecting-Ip` is, add `CLIENT_IP_HEADER:
-CF-Connecting-IP` to `k3s/apps/backend/configmap.yaml`, push, and restart the
-backend (`kubectl -n capm rollout restart deploy/backend`; a ConfigMap change
-alone does not restart pods). Read the trust caveat in
-[security-notes.md](security-notes.md) before setting it.
+The backend rate-limits requests per client IP. On this cluster that IP comes
+from Cloudflare's `CF-Connecting-IP` header (`CLIENT_IP_HEADER` in
+`k3s/apps/backend/configmap.yaml`). This was checked on 2026-11-13 with a
+throwaway `traefik/whoami` pod behind a temporary Ingress on a spare path:
+`X-Forwarded-For` arrived as `10.42.0.1` (a cluster-internal address) for
+every visitor, so without the setting all visitors shared one rate-limit
+bucket, while `Cf-Connecting-Ip` carried the caller's public IP.
+
+Repeat that check if the proxy chain changes (a different tunnel, ingress
+controller, or CDN). A ConfigMap change alone does not restart pods; a normal
+deploy rolls the backend, or run `kubectl -n capm rollout restart
+deploy/backend`. Read the trust caveat in
+[security-notes.md](security-notes.md): the header is trusted blindly.
 
 ## Pausing ArgoCD for maintenance
 

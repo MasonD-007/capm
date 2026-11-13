@@ -8,22 +8,46 @@ else's bundle.
 
 ## Install
 
-```sh
-curl -fsSL https://capm.masondrake.dev/install.sh | sh
-```
+| Method | Command | Notes |
+| --- | --- | --- |
+| curl installer | `curl -fsSL https://capm.masondrake.dev/install.sh \| sh` | macOS and Linux, amd64 and arm64. Verifies the SHA-256 and installs to `~/.local/bin/capm`; never uses sudo. |
+| Homebrew | `brew install masond-007/capm/capm` | Available once the tap is published. Installs shell completions too; update with `brew upgrade capm`. |
+| From source | `go install github.com/MasonD-007/capm/cli@latest` (or see [Build](#build)) | Needs Go; the binary reports its version as `dev`. |
 
-This downloads the latest `capm` release binary for your OS and CPU (macOS or
-Linux, amd64 or arm64) from GitHub Releases, verifies its SHA-256 against the
-release's `checksums.txt`, and installs it to `~/.local/bin/capm`. It never
-uses sudo. Set `CAPM_INSTALL_DIR` to install somewhere else:
+The curl installer downloads the latest `capm` release binary for your OS and
+CPU from GitHub Releases, verifies its SHA-256 against the release's
+`checksums.txt`, and installs it to `~/.local/bin/capm`. Set `CAPM_INSTALL_DIR`
+to install somewhere else:
 
 ```sh
 curl -fsSL https://capm.masondrake.dev/install.sh | CAPM_INSTALL_DIR=/usr/local/bin sh
 ```
 
 If the install directory is not on your `PATH`, the script prints the
-`export PATH=...` line to add. Building from source still works; see
-[Build](#build).
+`export PATH=...` line to add. After installing it prints one line saying how to
+enable shell completions; it never edits your shell's startup files.
+
+### Shell completions
+
+`capm completion bash|zsh|fish` prints a completion script for your shell. It
+completes commands, flags, flag values (such as `--sort`), directories, and
+`owner/name[@version]` bundle references (from the bundles capm remembers and a
+quick registry search that gives up after one second; completion never prints
+an error and never sends your login).
+
+```sh
+# bash (3.2 or newer): add to ~/.bashrc
+eval "$(capm completion bash)"
+
+# zsh: add to ~/.zshrc, after compinit
+source <(capm completion zsh)
+# or put it on your fpath once:  capm completion zsh > "${fpath[1]}/_capm"
+
+# fish: save once
+capm completion fish > ~/.config/fish/completions/capm.fish
+```
+
+A Homebrew install sets completions up for you.
 
 ### Updating
 
@@ -36,14 +60,15 @@ capm self-update           # download, verify, replace this binary
 SHA-256 against the release's `checksums.txt` (a mismatch changes nothing and
 exits 1), and swaps the binary in place atomically. It refuses when the
 directory is not writable, or when capm was installed by Homebrew or Nix (use
-that package manager). A build that is not a released version (`dev` or a
+that package manager: `brew upgrade capm`). A build that is not a released version (`dev` or a
 commit hash) counts as out of date and is updated. Re-running the installer
 above does the same job. Release builds are tagged `vX.Y.Z`; per-commit builds
 are prereleases the installer never picks.
 
 capm also checks for a newer release at most once every 24 hours, after a
 command finishes successfully, and prints one line on stderr:
-`a newer capm is available (0.2.0); run capm self-update`. The check is a plain
+`a newer capm is available (0.2.0); run capm self-update` (for a Homebrew
+install it says `run brew upgrade capm` instead). The check is a plain
 GET of the GitHub releases page (user agent `capm/<version>`, nothing else sent),
 gives up after 1.5 seconds and never fails a command. It stays silent when
 stderr is not a terminal, when `CI` is set, for non-release builds, and when

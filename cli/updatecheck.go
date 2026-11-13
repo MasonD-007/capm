@@ -295,6 +295,33 @@ func (e env) maybeNotifyUpdate(args []string, code int, stderr io.Writer) {
 		return
 	}
 	if newer, _ := isNewer(version, latest); newer {
-		fmt.Fprintf(stderr, "a newer capm is available (%s); run capm self-update\n", manifest.DisplaySafe(latest))
+		fmt.Fprintf(stderr, "a newer capm is available (%s); %s\n", manifest.DisplaySafe(latest), e.updateAdvice())
 	}
+}
+
+// updateAdvice is what the notice tells the user to run. self-update refuses
+// to replace a binary owned by a package manager (see packageManagerPath), so
+// a Homebrew install is pointed at brew and a Nix one at its package manager.
+// The path is checked as given and with symlinks resolved (Homebrew links
+// bin/capm into the Cellar).
+func (e env) updateAdvice() string {
+	path, err := e.executablePath()
+	if err != nil {
+		return "run capm self-update"
+	}
+	paths := []string{path}
+	if real, err := filepath.EvalSymlinks(path); err == nil {
+		paths = append(paths, real)
+	}
+	pm := false
+	for _, p := range paths {
+		if strings.Contains(p, "/Cellar/") || strings.Contains(p, "/homebrew/") {
+			return "run brew upgrade capm"
+		}
+		pm = pm || packageManagerPath(p)
+	}
+	if pm {
+		return "update it with your package manager"
+	}
+	return "run capm self-update"
 }

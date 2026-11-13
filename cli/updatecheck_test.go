@@ -238,3 +238,44 @@ func TestNoticeSanitisesLatest(t *testing.T) {
 		t.Fatalf("%q", out.String())
 	}
 }
+
+// A Homebrew (or Nix) install cannot self-update, so the notice must not tell
+// the user to run a command that refuses.
+func TestNoticeForPackageManagerInstall(t *testing.T) {
+	cellar := filepath.Join(t.TempDir(), "Cellar", "capm", "0.1.0", "bin")
+	if err := os.MkdirAll(cellar, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	real := filepath.Join(cellar, "capm")
+	if err := os.WriteFile(real, []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "bin", "capm")
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct{ name, path, want string }{
+		{"homebrew path", "/opt/homebrew/bin/capm", "run brew upgrade capm\n"},
+		{"cellar path", "/usr/local/Cellar/capm/0.1.0/bin/capm", "run brew upgrade capm\n"},
+		{"symlink into a Cellar", link, "run brew upgrade capm\n"},
+		{"nix", "/nix/store/abc-capm/bin/capm", "update it with your package manager\n"},
+		{"plain install", "/home/u/.local/bin/capm", "run capm self-update\n"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := newNoticeFixture(t)
+			f.e.upd.exePath = func() (string, error) { return c.path, nil }
+			code, _, errb := f.run("known")
+			if code != 0 {
+				t.Fatalf("exit %d: %s", code, errb)
+			}
+			want := "a newer capm is available (0.2.0); " + c.want
+			if !strings.HasSuffix(errb, want) {
+				t.Errorf("stderr %q, want it to end with %q", errb, want)
+			}
+		})
+	}
+}

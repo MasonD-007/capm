@@ -72,9 +72,11 @@ type Metadata struct {
 }
 
 type VersionInfo struct {
-	Version   string    `json:"version"`
-	Digest    string    `json:"digest"`
-	Yanked    bool      `json:"yanked"`
+	Version string `json:"version"`
+	Digest  string `json:"digest"`
+	Yanked  bool   `json:"yanked"`
+	// Removed marks a version the registry took down; older registries omit it.
+	Removed   bool      `json:"removed"`
 	CreatedAt time.Time `json:"createdAt"`
 }
 
@@ -170,6 +172,10 @@ func New(baseURL, token string) *Client {
 		PollInterval: 5 * time.Second,
 	}
 }
+
+// SetTimeout replaces the 30 second default total time of every request this
+// client makes (shell completion uses one second).
+func (c *Client) SetTimeout(d time.Duration) { c.hc.Timeout = d }
 
 func esc(parts ...string) string {
 	out := make([]string, len(parts))

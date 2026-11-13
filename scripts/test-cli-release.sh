@@ -101,6 +101,130 @@ if [ -n "$OS" ] && [ -n "$ARCH" ] && [ -f "$OUT/capm-$OS-$ARCH" ]; then
 fi
 expect "build-cli without version" 2 "" -- bash "$BUILDSH"
 
+# --- homebrew-formula ---------------------------------------------------------
+FORMULASH="$ROOT/scripts/homebrew-formula.sh"
+A=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+B=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+C=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+D=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+SUMS="$WORK/sums-ok.txt"
+printf '%s  capm-darwin-amd64\n%s  capm-darwin-arm64\n%s  capm-linux-amd64\n%s  capm-linux-arm64\n' "$A" "$B" "$C" "$D" >"$SUMS"
+
+# fexpect <name> <want-exit> -- cmd...: like expect, stdout kept in $WORK/f.out
+fexpect() {
+  local name="$1" want="$2"
+  shift 3
+  "$@" >"$WORK/f.out" 2>"$WORK/f.err"
+  local code=$?
+  if [ "$code" != "$want" ]; then bad "$name" "exit $code, want $want (stderr: $(cat "$WORK/f.err"))"; return 1; fi
+  ok "$name"
+}
+# fhas <name> <fixed string> : $WORK/f.out contains it; fnot: it does not
+fhas() { if grep -qF -- "$2" "$WORK/f.out"; then ok "$1"; else bad "$1" "missing: $2"; fi; }
+fnot() { if grep -qF -- "$2" "$WORK/f.out"; then bad "$1" "unexpected: $2"; else ok "$1"; fi; }
+ferr() { if grep -qF -- "$2" "$WORK/f.err"; then ok "$1"; else bad "$1" "stderr was: $(cat "$WORK/f.err")"; fi; }
+
+if fexpect "formula: sample checksums" 0 -- bash "$FORMULASH" 1.2.3 "$SUMS"; then
+  cp "$WORK/f.out" "$WORK/capm.rb"
+  fhas "formula: class"            "class Capm < Formula"
+  fhas "formula: homepage"         'homepage "https://capm.masondrake.dev"'
+  fhas "formula: desc"             'desc "'
+  fhas "formula: version"          'version "1.2.3"'
+  fhas "formula: on_macos"         "on_macos do"
+  fhas "formula: on_linux"         "on_linux do"
+  fhas "formula: on_arm"           "on_arm do"
+  fhas "formula: on_intel"         "on_intel do"
+  fhas "formula: darwin-arm64 url" 'url "https://github.com/MasonD-007/capm/releases/download/v1.2.3/capm-darwin-arm64"'
+  fhas "formula: darwin-amd64 url" 'url "https://github.com/MasonD-007/capm/releases/download/v1.2.3/capm-darwin-amd64"'
+  fhas "formula: linux-arm64 url"  'url "https://github.com/MasonD-007/capm/releases/download/v1.2.3/capm-linux-arm64"'
+  fhas "formula: linux-amd64 url"  'url "https://github.com/MasonD-007/capm/releases/download/v1.2.3/capm-linux-amd64"'
+  fhas "formula: darwin-amd64 sha" "sha256 \"$A\""
+  fhas "formula: darwin-arm64 sha" "sha256 \"$B\""
+  fhas "formula: linux-amd64 sha"  "sha256 \"$C\""
+  fhas "formula: linux-arm64 sha"  "sha256 \"$D\""
+  fhas "formula: installs as capm" 'bin.install Dir["capm-*"].first => "capm"'
+  fhas "formula: completions"      'generate_completions_from_executable(bin/"capm", "completion"'
+  fhas "formula: test block"       'assert_match version.to_s, shell_output("#{bin}/capm version")'
+  # Each checksum sits right under its own url.
+  if awk '/capm-darwin-arm64"/{getline; print}' "$WORK/capm.rb" | grep -q "$B" \
+    && awk '/capm-darwin-amd64"/{getline; print}' "$WORK/capm.rb" | grep -q "$A" \
+    && awk '/capm-linux-arm64"/{getline; print}' "$WORK/capm.rb" | grep -q "$D" \
+    && awk '/capm-linux-amd64"/{getline; print}' "$WORK/capm.rb" | grep -q "$C"; then ok "formula: each sha256 follows its own url"; else bad "formula: each sha256 follows its own url"; fi
+  if command -v ruby >/dev/null 2>&1; then
+    if ruby -c "$WORK/capm.rb" >"$WORK/ruby.out" 2>&1; then ok "formula: ruby -c"; else bad "formula: ruby -c" "$(cat "$WORK/ruby.out")"; fi
+    # Evaluate it against a stub Formula to check the platform blocks.
+    cat >"$WORK/stub.rb" <<'RUBY'
+$ctx = []
+$got = {}
+class Formula
+  class << self
+    def desc(v); end
+    def homepage(v); end
+    def version(v); end
+    def test; end # Formula's "test do" block; Kernel#test would otherwise be called
+    def on_macos; $ctx.push("macos"); yield; $ctx.pop; end
+    def on_linux; $ctx.push("linux"); yield; $ctx.pop; end
+    def on_arm; $ctx.push("arm"); yield; $ctx.pop; end
+    def on_intel; $ctx.push("intel"); yield; $ctx.pop; end
+    def url(v); ($got[$ctx.join("/")] ||= {})[:url] = v; end
+    def sha256(v); ($got[$ctx.join("/")] ||= {})[:sha] = v; end
+  end
+end
+load ARGV[0]
+want = {
+  "macos/arm" => "capm-darwin-arm64", "macos/intel" => "capm-darwin-amd64",
+  "linux/arm" => "capm-linux-arm64", "linux/intel" => "capm-linux-amd64",
+}
+want.each do |k, asset|
+  g = $got[k] or abort("no block for #{k}")
+  abort("#{k}: url #{g[:url]}") unless g[:url].end_with?("/v1.2.3/#{asset}")
+  abort("#{k}: sha #{g[:sha]}") unless g[:sha] =~ /\A[0-9a-f]{64}\z/
+end
+abort("extra blocks: #{$got.keys}") unless $got.size == 4
+RUBY
+    if ruby "$WORK/stub.rb" "$WORK/capm.rb" >"$WORK/ruby.out" 2>&1; then ok "formula: platform blocks map to the right assets (ruby stub)"; else bad "formula: platform blocks map to the right assets (ruby stub)" "$(cat "$WORK/ruby.out")"; fi
+  else
+    echo "SKIP formula: ruby is not installed; the formula was not syntax-checked"
+  fi
+fi
+
+# the same checksums as `sha256sum` writes them in binary mode ("*name")
+sed 's/  capm-/ *capm-/' "$SUMS" >"$WORK/sums-star.txt"
+fexpect "formula: binary-mode checksums" 0 -- bash "$FORMULASH" 1.2.3 "$WORK/sums-star.txt"
+# checksums.txt with unrelated lines is fine
+{ cat "$SUMS"; printf '%s  other-file\n' "$A"; } >"$WORK/sums-extra.txt"
+fexpect "formula: extra lines ignored" 0 -- bash "$FORMULASH" 1.2.3 "$WORK/sums-extra.txt"
+
+fexpect "formula: no args"            2 -- bash "$FORMULASH"
+fexpect "formula: one arg"            2 -- bash "$FORMULASH" 1.2.3
+fexpect "formula: three args"         2 -- bash "$FORMULASH" 1.2.3 "$SUMS" x
+for v in v1.2.3 1.2 1.2.3.4 1.2.3-rc.1 1.2.3+meta 01.2.3 "" abc "1.2.3;rm -rf" "$(printf '1.2.3\nx')"; do
+  fexpect "formula: rejects version '$(printf '%s' "$v" | tr '\n' '~')'" 1 -- bash "$FORMULASH" "$v" "$SUMS"
+  fnot "formula: ...and prints nothing" "class"
+done
+fexpect "formula: missing checksums file" 1 -- bash "$FORMULASH" 1.2.3 "$WORK/nope.txt"
+for asset in capm-darwin-amd64 capm-darwin-arm64 capm-linux-amd64 capm-linux-arm64; do
+  grep -v " $asset\$" "$SUMS" >"$WORK/sums-missing.txt"
+  fexpect "formula: $asset missing from checksums" 1 -- bash "$FORMULASH" 1.2.3 "$WORK/sums-missing.txt"
+  ferr "formula: ...names $asset" "$asset"
+  fnot "formula: ...and prints nothing" "class"
+done
+sed 's/^a*/abc/' "$SUMS" >"$WORK/sums-short.txt"
+fexpect "formula: short digest"       1 -- bash "$FORMULASH" 1.2.3 "$WORK/sums-short.txt"
+ferr "formula: ...says 64 hex"        "64 lowercase hex"
+sed '1s/^a/g/' "$SUMS" >"$WORK/sums-nothex.txt"
+fexpect "formula: non-hex digest"     1 -- bash "$FORMULASH" 1.2.3 "$WORK/sums-nothex.txt"
+sed '1s/^a/A/' "$SUMS" >"$WORK/sums-upper.txt"
+fexpect "formula: uppercase digest"   1 -- bash "$FORMULASH" 1.2.3 "$WORK/sums-upper.txt"
+{ cat "$SUMS"; printf '%s  capm-linux-arm64\n' "$A"; } >"$WORK/sums-dup.txt"
+fexpect "formula: duplicate entry"    1 -- bash "$FORMULASH" 1.2.3 "$WORK/sums-dup.txt"
+: >"$WORK/sums-empty.txt"
+fexpect "formula: empty checksums"    1 -- bash "$FORMULASH" 1.2.3 "$WORK/sums-empty.txt"
+# real checksums from the build above feed straight through
+if [ -s "$OUT/checksums.txt" ]; then
+  fexpect "formula: real build checksums" 0 -- bash "$FORMULASH" 9.8.7 "$OUT/checksums.txt"
+fi
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" = 0 ]

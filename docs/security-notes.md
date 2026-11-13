@@ -238,14 +238,17 @@ be able to publish. For `pull_request_target` GitHub's `ref` and `sub` claims
 look exactly like a push to the base branch, so `event_name` is the only signal.
 GitHub's claims do not say whether the owner is a user or an organisation, so
 the registry asks GitHub's API (`GET /user/<id>`, unauthenticated, cached for 2
-minutes); if that lookup fails, the exchange fails (503). Organisation-owned
-repositories are refused until organisation namespaces exist. Banned users are
-refused as at login.
+minutes); if that lookup fails, the exchange fails (503). Only the types `User`
+and `Organization` are accepted; an organisation is handled as described in
+[Organisation namespaces](#organisation-namespaces). Banned accounts (users or
+organisations) are refused as at login.
 
 **The minted token.** It has scope `publish` and a fixed 15 minute lifetime
 (not `TOKEN_TTL_DAYS`), is not renewable, and is named `ci:<repository>`. It can
-call exactly one route, `PUT /v1/bundles/{owner}/{name}/{version}`, for its own
-user. Every other authenticated route (yank, token management, usage, `me`,
+call exactly one route, `PUT /v1/bundles/{owner}/{name}/{version}`, and only for
+the one account it was minted for (the repository owner's id): never for the
+person who triggered the run, never for another organisation, and a token for a
+user's repository cannot publish into an organisation that user belongs to. Every other authenticated route (yank, token management, usage, `me`,
 admin) answers it 403, and a route added later is closed to it by default.
 Quotas, publish rate limits, duplicate and validation checks apply as to any
 publish. The owner sees these tokens in `capm tokens` and can revoke them; an
@@ -266,6 +269,98 @@ triggers a refetch if the last attempt is over a minute old). A cached key keeps
 working while the last successful fetch is under 24 hours old; past that, and
 when no keys were ever fetched, exchanges fail closed with 503 and
 `Retry-After`. Publishing with a normal `capm login` token is unaffected.
+
+## Organisation namespaces
+
+An organisation is an account row in the registry keyed by its GitHub numeric
+id, with the same login handling (and the same [login reassignment](#login-reassignment)
+caveats) as a user. GitHub user ids and organisation ids come from one id
+space, which is why one table holds both; the registry never lets an id change
+its recorded kind, and refuses and logs the attempt.
+
+**Who may publish and yank under an organisation.** One function
+(`store.AuthorizeOwner`) decides, for publish, yank, un-yank and the owner's
+usage view. A caller may act under `{owner}` when:
+
+1. they are that user (as before); or
+2. the owner is an organisation, the caller is not banned, the organisation is
+   not banned, and the caller has an `org_members` record, written by
+   `capm login --orgs`, that is **at most 24 hours old** and has a role that may
+   publish. A record without such a role, a stale record, a record dated in the
+   future, or any error while looking it up all mean no; or
+3. the caller is a CI token (scope `publish`) minted for exactly that account.
+   A CI token never uses memberships.
+
+**What the registry trusts to record a membership.** GitHub's answer, at login
+time, to the user's own access token (kept only for the duration of that login
+request, then discarded; never stored or logged):
+
+- `GET /user/memberships/orgs?state=active` (up to 10 pages of 100): a
+  membership with role `admin` (an organisation owner) qualifies.
+- For a membership with role `member`, `GET /orgs/{org}`: it qualifies only if
+  the reply contains `default_repository_permission` equal to `write` or
+  `admin`, and the reply is about the same organisation id. If the field is
+  absent (GitHub only returns it to callers with enough visibility), null, any
+  other value, or the call fails, the member does **not** qualify. Fail closed.
+- Write access granted by a team (rather than the organisation's base
+  permission) is not looked at and does not qualify in this version.
+- This has been written against GitHub's documentation and tested against a
+  fake GitHub only; it has not been run against the real API. In particular,
+  GitHub may well show `default_repository_permission` to few plain members, in
+  which case in practice only organisation owners can publish interactively.
+- An organisation row (and its membership rows) is created only for an
+  organisation GitHub lists for the logging-in user and that qualifies, or by
+  an OIDC exchange from a workflow of a repository the organisation owns. A
+  user cannot make the registry create a row for an organisation they do not
+  belong to, and nothing the client sends influences which organisations are
+  listed.
+
+**Revocation windows.** The registry only learns that someone left an
+organisation, or lost write access, at their next `capm login --orgs`. Until
+then their record keeps working for at most **24 hours** from the login that
+recorded it. Bans take effect immediately. Revoking a CI token takes effect
+immediately; the tokens last 15 minutes anyway. To stop CI publishing for an
+organisation as an operator: `capm admin revoke-tokens <org>` (organisations
+have no login of their own; the admin commands resolve them by login or id) or
+`capm admin ban <org>` (hides its bundles too).
+
+**What a CI token of an organisation can do.** It can publish any bundle name
+under the whole organisation's namespace, from any repository of the
+organisation whose workflow can request an OIDC token and is not a pull
+request. Treat write access to *any* such repository (and every Action it
+runs) as publish access to the organisation's namespace. Recommended: use an
+organisation (or a separate one) dedicated to bundles, or restrict which
+repositories may run workflows with `id-token: write`. Every version records
+the repository and workflow in `publishedVia`. Nobody is recorded in
+`publishedBy` for those versions.
+
+**Members' versions.** A member publishing interactively records their id and
+login as `publishedBy`, shown only for organisation bundles.
+
+## What "published from" does and does not prove
+
+A manifest may carry `metadata.repository` (`https://github.com/<owner>/<repo>`,
+strictly validated). The registry sets `versions.repo_verified` (reported as `repositoryVerified`) only when
+it was published by a CI token whose verified `repository` claim equals that
+value structurally (owner and repo compared case-insensitively; not as raw
+strings: a trailing slash, `.git`, another host or an extra path segment never
+matches, and the manifest is refused at publish if it has one). An interactive
+publish is never verified.
+
+It proves: GitHub signed a token for a workflow in that repository, in a
+non-pull-request event, and the registry issued a publish token from it for the
+repository's owner.
+
+It does not prove: that the bundle's contents match the repository's (the
+workflow packs whatever its working directory holds), that the repository,
+workflow or any Action it runs is trustworthy or reviewed, who triggered the
+run, or that the bundle is safe. Anyone with write access to the repository
+(and any Action it uses) can cause a "published from" version. The website and
+`capm inspect` word it as where the version was published from, label the
+registry as the source, and show an unverified repository only as the author's
+claim. `capm inspect` cannot check the claim and prints nothing as published
+from unless the registry's own provenance record names the same repository as
+the manifest.
 
 ## sbx runtime behaviour is unverified
 

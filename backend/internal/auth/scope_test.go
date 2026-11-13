@@ -177,8 +177,10 @@ func TestScopedTokenIsRefusedOnEveryAuthenticatedRoute(t *testing.T) {
 // The two packages each name the scope (auth mints it, api enforces it); they
 // must never drift apart.
 func TestScopeNamesAgree(t *testing.T) {
-	if auth.ScopePublish != api.ScopePublish {
-		t.Fatalf("auth %q != api %q", auth.ScopePublish, api.ScopePublish)
+	for _, other := range []string{api.ScopePublish, store.ScopePublish} {
+		if auth.ScopePublish != other {
+			t.Fatalf("auth %q, other %q", auth.ScopePublish, other)
+		}
 	}
 }
 

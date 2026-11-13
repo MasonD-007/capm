@@ -423,7 +423,23 @@ func (s *Service) usage(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	u, err := s.store.Usage(tk.UserID)
+	// ?owner=<login> shows an organisation's usage to the members who may
+	// publish under it; it goes through the same function as publish and yank.
+	who := tk.UserID
+	if owner := r.URL.Query().Get("owner"); owner != "" {
+		acc, den, err := s.store.AuthorizeOwner(tk, owner, store.ActRead)
+		if err != nil {
+			log.Printf("auth: usage owner: %v", err)
+			writeErr(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		if den != nil {
+			writeErr(w, http.StatusForbidden, "you may only see the usage of your own account or of an organisation you may publish under")
+			return
+		}
+		who = acc.Owner.ID
+	}
+	u, err := s.store.Usage(who)
 	if err != nil {
 		log.Printf("auth: usage: %v", err)
 		writeErr(w, http.StatusInternalServerError, "internal error")

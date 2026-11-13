@@ -25,31 +25,37 @@ type adminKey struct{}
 func (a *API) adminGate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if p := r.URL.Path; p == "/v1/admin" || strings.HasPrefix(p, "/v1/admin/") {
-			id, _, ok := a.authenticate(r)
-			if !ok || a.cfg.IsAdmin == nil || !a.cfg.IsAdmin(id) {
+			tk, ok := a.resolveCaller(r)
+			if ok && tk.Scope != "" {
+				// A scoped token is never an admin; say so rather than hide
+				// the surface (the holder is already an authenticated user).
+				writeErr(w, 403, scopeRefused)
+				return
+			}
+			if !ok || a.cfg.IsAdmin == nil || !a.cfg.IsAdmin(tk.UserID) {
 				http.NotFound(w, r)
 				return
 			}
-			r = r.WithContext(context.WithValue(r.Context(), adminKey{}, id))
+			r = r.WithContext(context.WithValue(r.Context(), adminKey{}, tk.UserID))
 		}
 		next.ServeHTTP(w, r)
 	})
 }
 
-func (a *API) mountAdmin(mux *http.ServeMux) {
-	mux.HandleFunc("POST /v1/admin/bundles/{owner}/{name}/{version}/remove", a.adminRemove(false))
-	mux.HandleFunc("DELETE /v1/admin/bundles/{owner}/{name}/{version}/remove", a.adminRestore(false))
-	mux.HandleFunc("POST /v1/admin/bundles/{owner}/{name}/remove", a.adminRemove(true))
-	mux.HandleFunc("DELETE /v1/admin/bundles/{owner}/{name}/remove", a.adminRestore(true))
-	mux.HandleFunc("POST /v1/admin/users/{user}/ban", a.adminBan)
-	mux.HandleFunc("DELETE /v1/admin/users/{user}/ban", a.adminUnban)
-	mux.HandleFunc("DELETE /v1/admin/users/{user}/tokens", a.adminRevokeTokens)
-	mux.HandleFunc("GET /v1/admin/users/{user}/quota", a.adminGetQuota)
-	mux.HandleFunc("PUT /v1/admin/users/{user}/quota", a.adminSetQuota)
-	mux.HandleFunc("GET /v1/admin/log", a.adminLog)
-	mux.HandleFunc("GET /v1/admin/reports", a.adminListReports)
-	mux.HandleFunc("GET /v1/admin/reports/{id}", a.adminGetReport)
-	mux.HandleFunc("POST /v1/admin/reports/{id}/resolve", a.adminResolveReport)
+func (a *API) mountAdmin(handle func(pattern string, h func(http.ResponseWriter, *http.Request))) {
+	handle("POST /v1/admin/bundles/{owner}/{name}/{version}/remove", a.adminRemove(false))
+	handle("DELETE /v1/admin/bundles/{owner}/{name}/{version}/remove", a.adminRestore(false))
+	handle("POST /v1/admin/bundles/{owner}/{name}/remove", a.adminRemove(true))
+	handle("DELETE /v1/admin/bundles/{owner}/{name}/remove", a.adminRestore(true))
+	handle("POST /v1/admin/users/{user}/ban", a.adminBan)
+	handle("DELETE /v1/admin/users/{user}/ban", a.adminUnban)
+	handle("DELETE /v1/admin/users/{user}/tokens", a.adminRevokeTokens)
+	handle("GET /v1/admin/users/{user}/quota", a.adminGetQuota)
+	handle("PUT /v1/admin/users/{user}/quota", a.adminSetQuota)
+	handle("GET /v1/admin/log", a.adminLog)
+	handle("GET /v1/admin/reports", a.adminListReports)
+	handle("GET /v1/admin/reports/{id}", a.adminGetReport)
+	handle("POST /v1/admin/reports/{id}/resolve", a.adminResolveReport)
 }
 
 func adminOf(r *http.Request) int64 { id, _ := r.Context().Value(adminKey{}).(int64); return id }

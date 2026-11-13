@@ -41,8 +41,8 @@ func TestMigrateV6DatabaseAddsEmptyReports(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v := schemaVersion(t, s.db); v != 7 || len(migrations) != 7 {
-		t.Fatalf("schema_version = %d (%d steps), want 7", v, len(migrations))
+	if v := schemaVersion(t, s.db); v != 8 || len(migrations) != 8 {
+		t.Fatalf("schema_version = %d (%d steps), want 8", v, len(migrations))
 	}
 	if after := dumpRows(t, s.db, v6Rows); !reflect.DeepEqual(before, after) {
 		t.Fatalf("existing rows changed:\n%v\n%v", before, after)
@@ -82,7 +82,7 @@ func TestMigrateV6DatabaseAddsEmptyReports(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s2.Close()
-	if v := schemaVersion(t, s2.db); v != 7 {
+	if v := schemaVersion(t, s2.db); v != 8 {
 		t.Fatalf("version after reopen = %d", v)
 	}
 	if !reflect.DeepEqual(first, schemaDump(t, s2.db)) {

@@ -530,6 +530,31 @@ Expired and revoked token rows older than 30 days are deleted at every startup.
 
 Removed blobs remain in restic snapshots (including this one) until they age out.
 
+## Cutting a CLI release
+
+Every merge to `main` publishes a per-commit CLI build as a prerelease
+(`cli-<sha>`, not marked latest). Those never reach `releases/latest`, which is
+what `install.sh` and `capm self-update` use. A named release is cut with a tag
+on a commit that is on `main`:
+
+```sh
+git tag v0.1.0 <commit on main>
+git push origin v0.1.0
+```
+
+The `CLI Release` workflow (`.github/workflows/cli-release.yml`) then checks the
+tag is `vX.Y.Z` (or `vX.Y.Z-rc.1` style) and on `main`, builds the four binaries
+with `main.version` set to the tag without the `v`, writes `checksums.txt`, and
+publishes release `v0.1.0` marked latest. A prerelease-style tag is published as
+a prerelease and never becomes latest. Re-running the workflow for the same tag
+replaces the assets. The tag push does not run CI, Release or Deploy.
+
+Until the first tag, the latest release remains the last per-commit build that
+was published before this change; the installer keeps working from it. Per-commit
+prereleases accumulate (one per merge); there is no automatic cleanup, so prune
+old `cli-*` prereleases by hand when the list gets long. Never delete the
+release currently marked latest.
+
 ## Rollback
 
 Rollouts are commits, so a rollback is a revert. Find the deploy commit and

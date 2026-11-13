@@ -71,6 +71,7 @@ Commands:
   known     List the bundles capm remembers (pinned owners); known forget <owner/name>
   self-update  Replace this binary with the latest release (--check only reports)
   outdated  List bundles you have run that have a newer version, and what it changes
+  completion  Print a shell completion script (bash, zsh or fish)
   version   Print the capm version
 
 capm run [--yes] [--workdir DIR] [--model-url URL] [--model-key KEY] [--model NAME]
@@ -188,6 +189,8 @@ func runCommand(args []string, stdout, stderr io.Writer, e env) int {
 		return selfUpdate(args[1:], stdout, stderr, e)
 	case "outdated":
 		return outdated(args[1:], stdout, stderr, e)
+	case "completion":
+		return completion(args[1:], stdout, stderr, e)
 	case "version":
 		fmt.Fprintf(stdout, "capm %s\n", version)
 		return 0

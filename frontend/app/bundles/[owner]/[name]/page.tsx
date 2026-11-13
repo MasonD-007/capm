@@ -10,6 +10,8 @@ import { riskDisplay, sortRiskLabels } from "@/lib/risk";
 import { clean } from "@/lib/text";
 import { CopyButton } from "../../../_components/copy-button";
 import { ownerHref } from "../../../_components/bundle-rows";
+import { ReportForm } from "../../../_components/report-form";
+import { submitReport } from "./report-action";
 
 type Props = {
   params: Promise<{ owner: string; name: string }>;
@@ -151,6 +153,8 @@ async function Detail({ params, searchParams }: Props) {
           </div>
         </section>
       )}
+
+      <ReportForm action={submitReport.bind(null, owner, name)} defaultVersion={clean(selected.version)} />
     </>
   );
 }

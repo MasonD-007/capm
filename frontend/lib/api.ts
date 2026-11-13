@@ -90,7 +90,7 @@ export class ApiError extends Error {
 
 const TIMEOUT_MS = 5000;
 
-function baseUrl(): string {
+export function baseUrl(): string {
   const u =
     process.env.API_URL ?? process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080";
   return u.replace(/\/+$/, "");
@@ -144,7 +144,7 @@ export function listBundles(o: ListOptions = {}): Promise<BundleListItem[]> {
 const SEGMENT = /^[A-Za-z0-9._-]+$/;
 
 /** Owner/name must be plain path segments: `.`/`..` would collapse onto other API routes. */
-function validSegment(s: string): boolean {
+export function validSegment(s: string): boolean {
   return SEGMENT.test(s) && s !== "." && s !== "..";
 }
 

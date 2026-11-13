@@ -1,0 +1,79 @@
+name: CLI Release
+
+# Cuts a named CLI release from a tag: tag a commit on main with vX.Y.Z and push the tag.
+# Deliberately separate from the CI -> Release -> Deploy chain: a tag push
+# triggers none of those (CI only runs for branch pushes), and Deploy's
+# workflow_run trigger names only "Release", so this cannot start a deploy.
+#
+# The build steps live in scripts/build-cli.sh (shared with release.yml's
+# per-commit job and unit-tested locally) rather than a composite action, so
+# both workflows stay plain steps calling one tested script.
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'
+
+permissions:
+  contents: write
+
+# Never run two releases for the same tag at once; do not cancel a running one.
+concurrency:
+  group: cli-release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and Publish Tagged CLI
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.ref_name }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      # Full history so "is this commit on main" can be answered.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check the tag
+        run: |
+          set -eu
+          kind="$(bash scripts/release-tag.sh classify "${TAG}")"
+          echo "KIND=${kind}" >> "$GITHUB_ENV"
+          echo "VERSION=$(bash scripts/release-tag.sh version "${TAG}")" >> "$GITHUB_ENV"
+          git fetch origin main:refs/remotes/origin/main
+          bash scripts/release-tag.sh check-main "${TAG}"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.work
+          cache-dependency-path: '**/go.sum'
+
+      - name: Cross-compile
+        run: bash scripts/build-cli.sh "${VERSION}" dist
+
+      # Safe to re-run for the same tag: assets are replaced as a set and the
+      # prerelease/latest state is re-applied. A vX.Y.Z-pre tag is a prerelease
+      # and never latest; a plain vX.Y.Z tag is marked latest explicitly.
+      - name: Publish release
+        run: |
+          set -eu
+          if [ "${KIND}" = prerelease ]; then
+            flags="--prerelease --latest=false"
+          else
+            flags="--latest"
+          fi
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release upload "${TAG}" --clobber dist/capm-* dist/checksums.txt
+            # shellcheck disable=SC2086
+            gh release edit "${TAG}" ${flags}
+            exit 0
+          fi
+          # shellcheck disable=SC2086
+          gh release create "${TAG}" \
+            --verify-tag \
+            ${flags} \
+            --title "capm ${VERSION}" \
+            --notes "capm CLI ${VERSION}. Install: curl -fsSL https://capm.masondrake.dev/install.sh | sh  (or run capm self-update)" \
+            dist/capm-darwin-amd64 dist/capm-darwin-arm64 \
+            dist/capm-linux-amd64 dist/capm-linux-arm64 dist/checksums.txt

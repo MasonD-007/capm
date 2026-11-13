@@ -25,6 +25,32 @@ If the install directory is not on your `PATH`, the script prints the
 `export PATH=...` line to add. Building from source still works; see
 [Build](#build).
 
+### Updating
+
+```sh
+capm self-update --check   # prints "current <v> latest <v>"; changes nothing
+capm self-update           # download, verify, replace this binary
+```
+
+`self-update` downloads the latest release for your OS and CPU, checks its
+SHA-256 against the release's `checksums.txt` (a mismatch changes nothing and
+exits 1), and swaps the binary in place atomically. It refuses when the
+directory is not writable, or when capm was installed by Homebrew or Nix (use
+that package manager). A build that is not a released version (`dev` or a
+commit hash) counts as out of date and is updated. Re-running the installer
+above does the same job. Release builds are tagged `vX.Y.Z`; per-commit builds
+are prereleases the installer never picks.
+
+capm also checks for a newer release at most once every 24 hours, after a
+command finishes successfully, and prints one line on stderr:
+`a newer capm is available (0.2.0); run capm self-update`. The check is a plain
+GET of the GitHub releases page (user agent `capm/<version>`, nothing else sent),
+gives up after 1.5 seconds and never fails a command. It stays silent when
+stderr is not a terminal, when `CI` is set, for non-release builds, and when
+you set `CAPM_NO_UPDATE_CHECK=1` (any non-empty value). `CAPM_DOWNLOAD_BASE`
+overrides the download URL, as for the installer, and `CAPM_LATEST_URL` the page
+that names the latest tag.
+
 ## Prerequisites
 
 - Go 1.27.3 or newer (the version in `go.work` and each `go.mod`)
@@ -110,6 +136,7 @@ capm inspect alice/pr-reviewer@0.1.0   # declared permissions, without installin
 capm pull alice/pr-reviewer@0.1.0  # unpacks into ./pr-reviewer after checking the sha256 digest
 capm run alice/pr-reviewer@0.1.0 --model-url https://models.example.com --allow-unenforced-egress
 capm inspect alice/pr-reviewer@0.2.0 --diff   # what changed since the version you last ran
+capm outdated                      # bundles you have run that have a newer version, and what it changes
 capm known                         # bundles capm remembers (pinned owners, last run)
 capm known forget alice/pr-reviewer
 capm version                       # which build you are running
@@ -225,6 +252,14 @@ manifest of the last run you confirmed. Nothing is written when you only
   confirmation; use a terminal, or pass `--accept-permission-changes` to run
   non-interactively. If the same version is served with a different digest, the
   run is refused unless you pass `--accept-changed-digest`.
+- **`capm outdated`.** Lists, from the same file, the bundles you have run on
+  this registry whose latest installable version differs from the one you ran:
+  `owner/name  ran  latest  changes`, where changes is e.g. `adds 2 egress
+  hosts, 1 secret; widens 1 mount` or `no permission changes`. It only asks the
+  registry (metadata, never the bundle), runs nothing and writes nothing.
+  Bundles that were removed, are gone, changed owner or could not be reached get
+  a row saying so. With nothing recorded it says so; when all are current it
+  prints `all N bundles are up to date`.
 - `capm known forget owner/name` deletes a record; deleting the file forgets
   everything. A corrupt file is ignored with a warning and replaced on the next
   recorded run.

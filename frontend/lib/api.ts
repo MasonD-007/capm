@@ -32,6 +32,8 @@ export function noticeTexts(s: Summary, section: string): string[] {
 export type BundleListItem = {
   ownerId: number;
   owner: string;
+  /** "user" or "org"; absent on older servers. */
+  ownerKind?: string;
   name: string;
   /** Latest non-yanked version; empty when every version is yanked. */
   latest: string;
@@ -66,8 +68,16 @@ export type BundleVersion = {
   /** Raw all-time and 30-day download request counts (0 when removed). Absent on older servers. */
   downloads?: number;
   downloads30d?: number;
-  manifest: { metadata: { name: string; version: string; description?: string } };
+  manifest: { metadata: { name: string; version: string; description?: string; repository?: string } };
   summary: Summary;
+  /** "user" or "org"; absent on older servers. */
+  ownerKind?: string;
+  /** The member who published a version of an organisation's bundle (absent for users' own). */
+  publishedBy?: string;
+  /** The registry's statement that a GitHub Actions workflow of the manifest's repository published this version. */
+  repositoryVerified?: boolean;
+  /** Recorded provenance of a CI publish. Untrusted text; see lib/provenance.ts before rendering. */
+  publishedVia?: { repository?: string; workflowRef?: string; sha?: string };
 };
 
 /** True when an admin removed the version (false on servers that predate removal). */

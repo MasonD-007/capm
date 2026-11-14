@@ -27,7 +27,7 @@ spec:
           containers:
             - name: backup
               # Tag is rewritten to the released commit SHA by .github/workflows/deploy.yml.
-              image: ghcr.io/masond-007/capm/backup:802de739ae38a9262b9b69af2af4257cf04ef316
+              image: ghcr.io/masond-007/capm/backup:bdc3913f20431498a5e79f186f842548fa26704f
               env:
                 - name: DATA_DIR
                   value: /data

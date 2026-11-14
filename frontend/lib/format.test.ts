@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatDate, shortDigest, versionState } from "./format";
+import { SIGNED_CAPTION, formatDate, shortDigest, signedLabel, versionState } from "./format";
 
 describe("formatDate", () => {
   it("renders the UTC calendar date", () => {
@@ -41,5 +41,22 @@ describe("versionState", () => {
   });
   it("says so when no reason was given", () => {
     expect(versionState({ yanked: false, removed: true }).label).toBe("removed: (no reason given)");
+  });
+});
+
+describe("signedLabel", () => {
+  it("is plain text, nothing more", () => {
+    expect(signedLabel({ signed: true })).toBe("signed");
+    expect(signedLabel({ signed: false })).toBe("unsigned");
+  });
+  it("is empty when the registry did not say, and for removed versions", () => {
+    expect(signedLabel({})).toBe("");
+    expect(signedLabel({ signed: "yes" as unknown as boolean })).toBe("");
+    expect(signedLabel({ signed: true, removed: true })).toBe("");
+  });
+  it("has a caption that says the registry does not verify", () => {
+    expect(SIGNED_CAPTION).toBe(
+      "Signed means a signature file was uploaded. The registry does not verify it; capm verifies it when you pull or run.",
+    );
   });
 });

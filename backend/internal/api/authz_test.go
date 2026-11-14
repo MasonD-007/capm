@@ -19,11 +19,12 @@ import (
 // that owner" through authorizeOwner. A newly registered route is therefore
 // treated as owner-gated until its author lists it here deliberately.
 var readOnlyOwnerRoutes = map[string]bool{
-	"GET /v1/bundles/{owner}/{name}":                    true,
-	"GET /v1/bundles/{owner}/{name}/{version}":          true,
-	"GET /v1/bundles/{owner}/{name}/{version}/download": true,
-	"GET /v1/bundles/{owner}/{name}/resolve":            true,
-	"POST /v1/bundles/{owner}/{name}/report":            true,
+	"GET /v1/bundles/{owner}/{name}":                     true,
+	"GET /v1/bundles/{owner}/{name}/{version}":           true,
+	"GET /v1/bundles/{owner}/{name}/{version}/download":  true,
+	"GET /v1/bundles/{owner}/{name}/{version}/signature": true,
+	"GET /v1/bundles/{owner}/{name}/resolve":             true,
+	"POST /v1/bundles/{owner}/{name}/report":             true,
 }
 
 func TestEveryOwnerGatedRouteGoesThroughAuthorizeOwner(t *testing.T) {
@@ -68,9 +69,9 @@ func TestEveryOwnerGatedRouteGoesThroughAuthorizeOwner(t *testing.T) {
 			t.Errorf("%s: a stranger got %d, want 403", route, resp.StatusCode)
 		}
 	}
-	// publish, yank and un-yank today.
-	if gated != 3 {
-		t.Fatalf("%d owner-gated routes found, expected 3 (publish, yank, un-yank); update this test if a route was added deliberately", gated)
+	// publish, signature upload, yank and un-yank today.
+	if gated != 4 {
+		t.Fatalf("%d owner-gated routes found, expected 4 (publish, signature upload, yank, un-yank); update this test if a route was added deliberately", gated)
 	}
 }
 
@@ -103,6 +104,12 @@ func TestNoHandlerComparesTheOwnerPathValueDirectly(t *testing.T) {
 	}
 	if c := do("PUT", "/v1/bundles/acme/x/1.0.0", bundle(t, "x", "1.0.0")); c != 201 {
 		t.Fatalf("publish: %d", c)
+	}
+	sig := []byte(`{"mediaType":"application/vnd.dev.sigstore.bundle.v0.3+json","verificationMaterial":{},"messageSignature":{}}`)
+	req, _ := http.NewRequest("PUT", srv.URL+"/v1/bundles/acme/x/1.0.0/signature", bytes.NewReader(sig))
+	req.Header.Set("Content-Type", "application/json")
+	if resp, err := http.DefaultClient.Do(req); err != nil || resp.StatusCode != 201 {
+		t.Fatalf("org member signature upload: %v %v", resp, err)
 	}
 	for _, m := range []string{"POST", "DELETE"} {
 		if c := do(m, "/v1/bundles/acme/x/1.0.0/yank", nil); c != 200 {

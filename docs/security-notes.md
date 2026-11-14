@@ -192,6 +192,12 @@ Signing publishes the repository, commit, workflow path and run URL to a public,
 permanent log. Publishing signed bundles is a separate step from this one (this
 change makes the CLI able to check signatures).
 
+The registry can now store one signature (a Sigstore bundle) per version, which
+an authorised publisher uploads from CI; it is write-once, and the registry
+only stores and serves it. It does not verify it and its word is not trusted:
+a version marked `signed` only means a signature file exists. Verification
+happens in the CLI, which is not wired up yet.
+
 ## Login reassignment
 
 The registry keys owners by GitHub numeric ID, but bundle names use the

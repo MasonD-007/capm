@@ -47,6 +47,8 @@ export type BundleListItem = {
   downloads30d?: number;
   /** RFC 3339 time of the newest non-removed version; absent when there is none and on older servers. */
   updatedAt?: string;
+  /** A signature file was uploaded for `latest`. The registry does not verify it. Absent on older servers. */
+  signed?: boolean;
 };
 
 /** Mirrors manifest.RiskLabel (manifest/risk.go). `reason` is registry text: render it cleaned. */
@@ -74,6 +76,8 @@ export type BundleVersion = {
   ownerKind?: string;
   /** The member who published a version of an organisation's bundle (absent for users' own). */
   publishedBy?: string;
+  /** A signature file was uploaded for this version (never true when removed). Unverified by the registry. Absent on older servers. */
+  signed?: boolean;
   /** The registry's statement that a GitHub Actions workflow of the manifest's repository published this version. */
   repositoryVerified?: boolean;
   /** Recorded provenance of a CI publish. Untrusted text; see lib/provenance.ts before rendering. */

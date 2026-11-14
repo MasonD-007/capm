@@ -8,11 +8,6 @@ import (
 	"net/http"
 )
 
-// MaxSignatureBytes is the largest signature bundle FetchSignature accepts.
-// It equals the registry's own cap (and sigverify.MaxBundleSize); real bundles
-// are 4-10 KB.
-const MaxSignatureBytes = 64 << 10
-
 // maxSignatureRedirects bounds same-host redirects of a signature request.
 const maxSignatureRedirects = 3
 

@@ -115,7 +115,7 @@ func knownCmd(args []string, stdout, stderr io.Writer, e env) int {
 			return 0
 		}
 		tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(tw, "REGISTRY\tBUNDLE\tOWNER ID\tLAST RUN\tPINNED")
+		fmt.Fprintln(tw, "REGISTRY\tBUNDLE\tOWNER ID\tLAST RUN\tPINNED\tSIGNER")
 		for _, en := range entries {
 			last, pinned := "-", "-"
 			if en.Record.LastRun != nil {
@@ -128,7 +128,12 @@ func knownCmd(args []string, stdout, stderr io.Writer, e env) int {
 					pinned = en.Record.PinnedAt.Format("2006-01-02")
 				}
 			}
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", client.Sanitize(en.Registry), client.Sanitize(en.Key), id, last, pinned)
+			signer := "-"
+			if p := en.Record.SignerPin; p != nil && p.Repository != "" {
+				// Everything here came from a verified certificate.
+				signer = fmt.Sprintf("%s (verified %s)", client.Sanitize(p.Repository), client.Sanitize(p.VerifiedVersion))
+			}
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", client.Sanitize(en.Registry), client.Sanitize(en.Key), id, last, pinned, signer)
 		}
 		tw.Flush()
 		return 0

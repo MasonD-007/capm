@@ -58,6 +58,19 @@ func fetch(c *client.Client, owner, name, spec string) ([]byte, client.Resolved,
 	return b, res, nil
 }
 
+// checkBundleIdentity refuses a download whose own manifest names a different
+// bundle or version than the one that was requested. A signature, and the
+// digest, bind bytes and not owner/name@version, so without this check an old
+// (even correctly signed) tarball could be served under a new version label,
+// or one bundle under another's name.
+func checkBundleIdentity(m *manifest.Manifest, owner, name, version string) error {
+	if m.Metadata.Name == name && m.Metadata.Version == version {
+		return nil
+	}
+	return fmt.Errorf("refusing %s/%s@%s: the downloaded bundle says it is %s@%s; the registry served a bundle that is not the one requested",
+		owner, name, version, manifest.DisplaySafe(m.Metadata.Name), manifest.DisplaySafe(m.Metadata.Version))
+}
+
 // failFetch prints a fetch error for command cmd. A removed version prints
 // just "removed by the registry: <reason>"; anything else gets the usual
 // "capm <cmd>: " prefix.
@@ -124,8 +137,13 @@ func pull(args []string, stdout, stderr io.Writer, e env) int {
 		return 1
 	}
 	defer os.RemoveAll(tmp)
-	if _, err := manifest.UnpackTo(tarball, tmp); err != nil {
+	m, err := manifest.UnpackTo(tarball, tmp)
+	if err != nil {
 		fmt.Fprintf(stderr, "capm pull: refusing bundle: %v\n", err)
+		return 1
+	}
+	if err := checkBundleIdentity(m, owner, name, res.Version); err != nil {
+		fmt.Fprintf(stderr, "capm pull: %v\n", err)
 		return 1
 	}
 	os.Remove(dest) // succeeds only for an empty directory, which is allowed

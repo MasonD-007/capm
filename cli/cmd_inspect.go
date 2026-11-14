@@ -113,6 +113,9 @@ func fetchToTemp(e env, owner, name, spec, root, pattern string) (*manifest.Mani
 	if err != nil {
 		return nil, tmp, res, fmt.Errorf("invalid bundle: %w", err)
 	}
+	if err := checkBundleIdentity(m, owner, name, res.Version); err != nil {
+		return nil, tmp, res, err
+	}
 	return m, tmp, res, nil
 }
 

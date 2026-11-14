@@ -30,6 +30,25 @@ describe("listBundles", () => {
   });
 });
 
+describe("signed", () => {
+  it("is carried through the list and the versions list as a boolean, and is optional", async () => {
+    mockFetch(200, [
+      { ownerId: 1, owner: "alice", name: "x", latest: "1.0.0", description: "", signed: true },
+      { ownerId: 1, owner: "alice", name: "y", latest: "1.0.0", description: "" },
+    ]);
+    const list = await listBundles();
+    expect(list[0].signed).toBe(true);
+    expect(list[1].signed).toBeUndefined(); // older registry
+
+    mockFetch(200, [
+      { version: "1.0.0", yanked: false, signed: false },
+      { version: "1.1.0", yanked: false, signed: true },
+    ]);
+    const vs = await getBundle("alice", "x");
+    expect(vs.map((v) => v.signed)).toEqual([false, true]);
+  });
+});
+
 describe("getBundle", () => {
   it("returns versions for a well-formed owner/name", async () => {
     const f = mockFetch(200, [{ version: "1.0.0", yanked: false }]);

@@ -162,6 +162,10 @@ func (s *Store) remove(adminID int64, ownerLogin, name, version, reason string, 
 			WHERE owner_id = ? AND name = ? AND version = ?`, reason, owner, name, v.version); err != nil {
 			return res, err
 		}
+		// A signature is deleted with its version, in the same transaction.
+		if err := deleteSignatures(tx, owner, name, v.version); err != nil {
+			return res, err
+		}
 		res.Versions = append(res.Versions, v.version)
 	}
 	target := ownerLogin + "/" + name
@@ -256,6 +260,11 @@ func (s *Store) restore(adminID int64, ownerLogin, name, version string, whole b
 		}
 		if _, err := tx.Exec(`UPDATE versions SET removed = 0, removed_reason = ''
 			WHERE owner_id = ? AND name = ? AND version = ?`, owner, name, v.version); err != nil {
+			return res, err
+		}
+		// A restore never brings a signature back. Removal already deleted
+		// it; this also drops one a rolled-back release left behind.
+		if err := deleteSignatures(tx, owner, name, v.version); err != nil {
 			return res, err
 		}
 		res.Restored = append(res.Restored, v.version)

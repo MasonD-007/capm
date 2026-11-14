@@ -19,6 +19,9 @@ import (
 const (
 	MaxJSONBytes    = 1 << 20  // cap on JSON responses
 	MaxTarballBytes = 16 << 20 // cap on downloaded bundles
+	// MaxSignatureBytes caps a signature bundle, both what Signature accepts
+	// from the registry and what the registry accepts from PutSignature.
+	MaxSignatureBytes = 64 << 10
 )
 
 type DeviceCode struct {
@@ -112,8 +115,12 @@ type Metadata struct {
 	Version            string            `json:"version"`
 	Digest             string            `json:"digest"`
 	Yanked             bool              `json:"yanked"`
-	Manifest           manifest.Manifest `json:"manifest"`
-	CreatedAt          time.Time         `json:"createdAt"`
+	// Signed says a signature file was uploaded for this version. The
+	// registry does not verify it and the CLI must not treat the flag as
+	// trust: only verifying the bundle (Signature) means anything.
+	Signed    bool              `json:"signed"`
+	Manifest  manifest.Manifest `json:"manifest"`
+	CreatedAt time.Time         `json:"createdAt"`
 }
 
 type VersionInfo struct {
@@ -123,6 +130,8 @@ type VersionInfo struct {
 	// Removed marks a version the registry took down; older registries omit it.
 	Removed   bool      `json:"removed"`
 	CreatedAt time.Time `json:"createdAt"`
+	// Signed: see Metadata.Signed. False from a registry that predates it.
+	Signed bool `json:"signed"`
 }
 
 // BundleInfo is one entry of GET /v1/bundles. Latest is empty when every
@@ -145,6 +154,8 @@ type BundleInfo struct {
 	// CLI tells that it ignored a `sort` request.
 	Downloads30d *int64 `json:"downloads30d,omitempty"`
 	UpdatedAt    string `json:"updatedAt,omitempty"`
+	// Signed: Latest has a signature file (see Metadata.Signed); untrusted.
+	Signed bool `json:"signed"`
 }
 
 // Sanitize makes a server-supplied string safe to print on a terminal: C0
@@ -233,6 +244,16 @@ func esc(parts ...string) string {
 // do sends a request and returns the body of a 2xx response, capped at max
 // bytes. Non-2xx responses become *APIError carrying the server's message.
 func (c *Client) do(method, path string, body []byte, max int64) ([]byte, error) {
+	ctype := "application/gzip"
+	if strings.Contains(path, "/auth/") || strings.Contains(path, "/admin/") || strings.HasSuffix(path, "/report") {
+		ctype = "application/json"
+	}
+	return c.doAs(method, path, body, max, c.token, ctype)
+}
+
+// doAs is do with an explicit bearer token ("" sends none) and the
+// Content-Type used when there is a body.
+func (c *Client) doAs(method, path string, body []byte, max int64, token, ctype string) ([]byte, error) {
 	var rd io.Reader
 	if body != nil {
 		rd = bytes.NewReader(body)
@@ -241,15 +262,11 @@ func (c *Client) do(method, path string, body []byte, max int64) ([]byte, error)
 	if err != nil {
 		return nil, err
 	}
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	if body != nil {
-		if strings.Contains(path, "/auth/") || strings.Contains(path, "/admin/") || strings.HasSuffix(path, "/report") {
-			req.Header.Set("Content-Type", "application/json")
-		} else {
-			req.Header.Set("Content-Type", "application/gzip")
-		}
+		req.Header.Set("Content-Type", ctype)
 	}
 	resp, err := c.hc.Do(req)
 	if err != nil {
@@ -546,6 +563,35 @@ func (c *Client) Metadata(owner, name, version string) (Metadata, error) {
 
 func (c *Client) Download(owner, name, version string) ([]byte, error) {
 	return c.do("GET", "/v1/bundles/"+esc(owner, name, version)+"/download", nil, MaxTarballBytes)
+}
+
+// ErrNoSignature is what Signature returns when the registry has no signature
+// for the version (a 404: unsigned, unknown, removed, or a registry that
+// predates signatures). Distinguish it with errors.Is.
+var ErrNoSignature = errors.New("the registry has no signature for this version")
+
+// Signature fetches the stored signature bundle of a version, exactly as
+// uploaded, capped at MaxSignatureBytes. It is anonymous (no token is sent)
+// and the bytes are untrusted until verified. A missing signature is
+// ErrNoSignature; every other failure is returned as is.
+func (c *Client) Signature(owner, name, version string) ([]byte, error) {
+	b, err := c.doAs("GET", "/v1/bundles/"+esc(owner, name, version)+"/signature", nil, MaxSignatureBytes, "", "")
+	var ae *APIError
+	if errors.As(err, &ae) && ae.Status == http.StatusNotFound {
+		return nil, ErrNoSignature
+	}
+	return b, err
+}
+
+// PutSignature uploads a signature bundle for a version. The registry stores
+// it as is and never verifies it; it answers 409 when the version already has
+// one (an *APIError with Status 409).
+func (c *Client) PutSignature(owner, name, version string, bundle []byte) error {
+	if bundle == nil {
+		bundle = []byte{}
+	}
+	_, err := c.doAs("PUT", "/v1/bundles/"+esc(owner, name, version)+"/signature", bundle, MaxJSONBytes, c.token, "application/json")
+	return err
 }
 
 func (c *Client) Versions(owner, name string) ([]VersionInfo, error) {

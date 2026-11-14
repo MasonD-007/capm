@@ -29,6 +29,7 @@ var migrations = []migration{
 	migrateV7,
 	migrateV8,
 	migrateV9,
+	migrateV10,
 }
 
 // migrateV1 is the schema as it existed before migrations were introduced.
@@ -248,6 +249,33 @@ CREATE TABLE org_members (
 CREATE INDEX org_members_user ON org_members(user_id);
 ALTER TABLE versions ADD COLUMN published_by INTEGER;
 ALTER TABLE versions ADD COLUMN repo_verified INTEGER NOT NULL DEFAULT 0;`)
+	return err
+}
+
+// migrateV10 adds signature storage: one Sigstore bundle per version, stored
+// as uploaded. A pure table addition: nothing existing is touched, a
+// rolled-back release neither reads nor writes it (it would refuse to start on
+// a version-10 database anyway, see migrate), and no existing version is
+// signed.
+//
+// The primary key is what makes a signature write-once. There is no foreign
+// key to versions on purpose (it would not help a rolled-back release, which
+// deletes nothing); the store only inserts for a version that exists and
+// deletes the row when the version is removed, so the table is bounded by
+// versions.
+// uploaded_by is the acting user's id (NULL = no human user, a CI token of an
+// organisation). Signature bytes are not counted toward storage quotas.
+func migrateV10(tx *sql.Tx) error {
+	_, err := tx.Exec(`
+CREATE TABLE signatures (
+	owner_id    INTEGER NOT NULL,
+	name        TEXT NOT NULL,
+	version     TEXT NOT NULL,
+	bundle      BLOB NOT NULL,
+	created_at  INTEGER NOT NULL,
+	uploaded_by INTEGER,
+	PRIMARY KEY(owner_id, name, version)
+);`)
 	return err
 }
 

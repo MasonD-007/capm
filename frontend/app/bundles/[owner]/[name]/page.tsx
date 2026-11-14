@@ -4,7 +4,7 @@ import { Suspense } from "react";
 import { ApiError, getBundle, getVersionDetail, isRemoved, latestNonYanked, noticeTexts } from "@/lib/api";
 import type { BundleVersion, RiskLabel } from "@/lib/api";
 import { cliCommands } from "@/lib/commands";
-import { downloadTotals, formatDate, formatDownloads, shortDigest, versionState } from "@/lib/format";
+import { SIGNED_CAPTION, downloadTotals, formatDate, formatDownloads, shortDigest, signedLabel, versionState } from "@/lib/format";
 import { ownerKindLabel, provenanceOf, publishedByLabel } from "@/lib/provenance";
 import { Readme } from "@/lib/readme";
 import { riskDisplay, sortRiskLabels } from "@/lib/risk";
@@ -134,6 +134,12 @@ async function Detail({ params, searchParams }: Props) {
       <p className="mt-3 break-all font-mono text-xs text-zinc-500">
         Version {clean(selected.version)}, digest {clean(selected.digest)}
       </p>
+      {signedLabel(selected) && (
+        <p className="mt-1 text-sm text-zinc-700 dark:text-zinc-300">
+          Version {clean(selected.version)}: <span className="font-mono">{signedLabel(selected)}</span>
+          <span className="block text-xs text-zinc-500">{SIGNED_CAPTION}</span>
+        </p>
+      )}
 
       {(provenance || publishedBy) && <Provenance provenance={provenance} publishedBy={publishedBy} />}
 
@@ -242,6 +248,7 @@ function History({
         {selected.version === latest?.version ? " (latest installable)" : ""}. Choose a version to see
         its permissions and pinned commands.
       </p>
+      <p className="mt-1 text-xs text-zinc-500">{SIGNED_CAPTION}</p>
       <div
         className="mt-2 overflow-x-auto rounded border border-zinc-200 focus-visible:outline-2 focus-visible:outline-blue-600 dark:border-zinc-800"
         role="region"
@@ -254,6 +261,7 @@ function History({
               <th scope="col" className="px-3 py-2 font-medium">Version</th>
               <th scope="col" className="px-3 py-2 font-medium">Published</th>
               <th scope="col" className="px-3 py-2 font-medium">State</th>
+              <th scope="col" className="px-3 py-2 font-medium">Signature</th>
               <th scope="col" className="px-3 py-2 font-medium">Downloads</th>
               <th scope="col" className="px-3 py-2 font-medium">Digest</th>
             </tr>
@@ -277,6 +285,7 @@ function History({
                   <td className="px-3 py-2">
                     <span className={STATE_CLASS[st.kind]}>{st.label}</span>
                   </td>
+                  <td className="px-3 py-2 whitespace-nowrap">{signedLabel(v) || "-"}</td>
                   <td className="px-3 py-2 whitespace-nowrap tabular-nums">
                     {v.removed === true ? "-" : (v.downloads?.toLocaleString("en-US") ?? "")}
                   </td>

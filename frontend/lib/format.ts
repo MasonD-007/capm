@@ -57,3 +57,18 @@ export function versionState(v: { yanked: boolean; removed?: boolean; removedRea
   if (v.yanked) return { kind: "yanked", label: "yanked" };
   return { kind: "live", label: "live" };
 }
+
+/** Shown next to every signed/unsigned label: the flag is not a verdict. */
+export const SIGNED_CAPTION =
+  "Signed means a signature file was uploaded. The registry does not verify it; capm verifies it when you pull or run.";
+
+/**
+ * "signed" or "unsigned" as plain text; "" when the registry did not say
+ * (older server) or the version was removed. Never a trust claim.
+ */
+export function signedLabel(v: { signed?: unknown; removed?: boolean }): "signed" | "unsigned" | "" {
+  if (v.removed === true) return "";
+  if (v.signed === true) return "signed";
+  if (v.signed === false) return "unsigned";
+  return "";
+}

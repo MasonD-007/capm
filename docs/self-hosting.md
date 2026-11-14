@@ -349,6 +349,7 @@ Schema (schema version 6, which also has a `downloads` table of per-day request 
 | `tokens` | `hash` (sha256 of the token, primary key), `user_id`, `created_at`, `id` (public handle, unique), `name`, `expires_at` (unix seconds, NULL = never), `last_used_at`, `revoked_at` (NULL = live) |
 | `banned_users` | `user_id` (primary key), `reason`, `created_at` |
 | `admin_actions` | `id`, `admin_id`, `action`, `target`, `reason`, `created_at` |
+| `signatures` | `owner_id`, `name`, `version` (together the primary key), `bundle` (the Sigstore bundle JSON exactly as uploaded), `created_at`, `uploaded_by` (user id, NULL = a CI token of an organisation) |
 | `schema_version` | `version` (one row) |
 
 Remove a version, with its audit row (the id is the admin's GitHub id):
@@ -359,6 +360,9 @@ UPDATE versions SET removed = 1, removed_reason = 'contains malware'
 WHERE owner_id = (SELECT id FROM users WHERE login = 'alice')
   AND name = 'my-bundle' AND version = '1.0.0';
 SELECT changes();   -- expect 1
+DELETE FROM signatures      -- the API deletes the signature with the version
+WHERE owner_id = (SELECT id FROM users WHERE login = 'alice')
+  AND name = 'my-bundle' AND version = '1.0.0';
 INSERT INTO admin_actions(admin_id, action, target, reason, created_at)
 VALUES (139420415, 'remove_version', 'alice/my-bundle@1.0.0', 'contains malware', strftime('%s','now'));
 COMMIT;
@@ -578,8 +582,47 @@ kubectl -n capm logs -f job/backup-pre-migrate     # wait for it to finish
 kubectl -n capm delete job backup-pre-migrate      # afterwards
 ```
 
-**This release (schema version 9) migrates for organisation namespaces and
-verified repository links (step 9).** It runs, in one transaction:
+**This release (schema version 10) migrates for signature storage (step
+10).** It adds one table and changes nothing else, in one transaction:
+
+```sql
+CREATE TABLE signatures (
+	owner_id    INTEGER NOT NULL,
+	name        TEXT NOT NULL,
+	version     TEXT NOT NULL,
+	bundle      BLOB NOT NULL,
+	created_at  INTEGER NOT NULL,
+	uploaded_by INTEGER,
+	PRIMARY KEY(owner_id, name, version)
+);
+```
+
+The table holds one Sigstore signature bundle per version (at most 64 KiB, written
+once, stored exactly as uploaded) that a publisher's CI workflow attached with
+`PUT /v1/bundles/{owner}/{name}/{version}/signature`. The registry never
+verifies it; `capm` does. It can only be written for a version that exists, so
+the table can never hold more rows than `versions`; signature bytes do not
+count toward storage quotas. Removing a version deletes its signature row in the
+same transaction; restoring it does not bring the signature back (the slot is
+free for a new upload); yanking keeps it. **Take the backup above first (the
+pre-migration snapshot for step 10).** A release older than 10 refuses to start
+on a version-10 database, so a rollback needs the pre-migration snapshot;
+signatures uploaded since the deploy are lost with it. Nothing else needs
+changing: no ConfigMap, no new secret. Signature uploads share the publish
+rate setting (`PUBLISH_RATE_PER_HOUR`) but have their own per-user allowance, so
+signing does not spend publish slots.
+
+Who may upload: anyone authorised to publish under the owner (the owner, a
+qualifying organisation member, or a publish-scoped CI token minted for that
+owner), as long as the version has no signature yet. So any authorised
+publisher can attach the one signature a version will ever have. Because `capm`
+verifies the signature against the tarball digest and the owner's identity, a
+wrong or malicious signature cannot make a bundle verify; it can only occupy
+the slot, which means signing is denied for that version. The remedy is to
+publish a new version (an admin can also remove the version, which frees it).
+
+**Schema version 9 migrated for organisation namespaces and
+verified repository links (step 9).** It ran, in one transaction:
 
 ```sql
 ALTER TABLE users ADD COLUMN kind TEXT NOT NULL DEFAULT 'user' CHECK (kind IN ('user', 'org'));

@@ -39,8 +39,8 @@ func TestMigrateV2ToV3Tokens(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	if v := schemaVersion(t, s.db); v != 9 || len(migrations) != 9 {
-		t.Fatalf("schema_version = %d, len(migrations) = %d, want 9", v, len(migrations))
+	if v := schemaVersion(t, s.db); v != 10 || len(migrations) != 10 {
+		t.Fatalf("schema_version = %d, len(migrations) = %d, want 10", v, len(migrations))
 	}
 	for _, h := range [][]byte{{1, 2}, {3, 4}, {5, 6}} {
 		if _, _, err := s.UserByTokenHash(h); err != nil {

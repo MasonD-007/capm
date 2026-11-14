@@ -62,6 +62,9 @@ type Version struct {
 	// RepoVerified is true only for a version published by a CI token whose
 	// verified repository claim equals the manifest's metadata.repository.
 	RepoVerified bool
+	// Signed is true when a signature file was uploaded for the version (and
+	// it is not removed). The registry never verifies it.
+	Signed bool
 }
 
 type Store struct {
@@ -272,7 +275,8 @@ func (s *Store) PublishAs(ownerID int64, ownerLogin, name, version string, tarba
 
 func (s *Store) Versions(ownerLogin, name string) ([]Version, error) {
 	rows, err := s.db.Query(`SELECT v.owner_id, v.version, v.digest, v.yanked, v.manifest, v.created_at, v.removed, v.removed_reason, v.published_via,
-		u.kind, CASE WHEN v.published_by = v.owner_id THEN '' ELSE COALESCE(pb.login, '') END, v.repo_verified
+		u.kind, CASE WHEN v.published_by = v.owner_id THEN '' ELSE COALESCE(pb.login, '') END, v.repo_verified,
+		`+signedExpr+`
 		FROM versions v JOIN users u ON u.id = v.owner_id LEFT JOIN users pb ON pb.id = v.published_by AND pb.login NOT LIKE '~%'
 		WHERE u.login = ? AND v.name = ?`+notBanned+` ORDER BY v.created_at, v.rowid`, ownerLogin, name)
 	if err != nil {
@@ -288,9 +292,10 @@ func (s *Store) Versions(ownerLogin, name string) ([]Version, error) {
 			created  int64
 			removed  int
 			verified int
+			signed   int
 		)
 		if err := rows.Scan(&v.OwnerID, &v.Version, &v.Digest, &yanked, &mj, &created, &removed, &v.RemovedReason, &v.PublishedVia,
-			&v.OwnerKind, &v.PublishedBy, &verified); err != nil {
+			&v.OwnerKind, &v.PublishedBy, &verified, &signed); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal([]byte(mj), &v.Manifest); err != nil {
@@ -299,6 +304,7 @@ func (s *Store) Versions(ownerLogin, name string) ([]Version, error) {
 		v.Yanked = yanked != 0
 		v.Removed = removed != 0
 		v.RepoVerified = verified != 0
+		v.Signed = signed != 0
 		v.CreatedAt = time.Unix(created, 0).UTC()
 		out = append(out, v)
 	}

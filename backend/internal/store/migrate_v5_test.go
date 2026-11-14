@@ -50,8 +50,8 @@ func TestMigrateV4KeepsRowsAndAddsEmptyReadme(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v := schemaVersion(t, s.db); v != 9 {
-		t.Fatalf("schema_version = %d, want 9", v)
+	if v := schemaVersion(t, s.db); v != 10 {
+		t.Fatalf("schema_version = %d, want 10", v)
 	}
 	if after := dumpRows(t, s.db, v4Columns); !reflect.DeepEqual(before, after) {
 		t.Fatalf("existing columns changed:\n%v\n%v", before, after)
@@ -77,7 +77,7 @@ func TestMigrateV4KeepsRowsAndAddsEmptyReadme(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s2.Close()
-	if v := schemaVersion(t, s2.db); v != 9 {
+	if v := schemaVersion(t, s2.db); v != 10 {
 		t.Fatalf("version after reopen = %d", v)
 	}
 	if !reflect.DeepEqual(first, schemaDump(t, s2.db)) {

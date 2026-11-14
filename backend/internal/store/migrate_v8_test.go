@@ -40,8 +40,8 @@ func TestMigrateV7DatabaseAddsScopeClaimsAndProvenance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v := schemaVersion(t, s.db); v != 9 || len(migrations) != 9 {
-		t.Fatalf("schema_version = %d (%d steps), want 9", v, len(migrations))
+	if v := schemaVersion(t, s.db); v != 10 || len(migrations) != 10 {
+		t.Fatalf("schema_version = %d (%d steps), want 10", v, len(migrations))
 	}
 	if after := dumpRows(t, s.db, tokenRows); !reflect.DeepEqual(beforeTok, after) {
 		t.Fatalf("tokens changed:\n%v\n%v", beforeTok, after)

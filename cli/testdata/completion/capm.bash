@@ -128,7 +128,7 @@ _capm() {
       ;;
     pull)
       case "$cur" in
-        -*) _capm_words "--accept-new-owner"; return 0 ;;
+        -*) _capm_words "--accept-new-owner --accept-new-signer --allow-invalid-signature"; return 0 ;;
       esac
       _capm_bundles
       return 0
@@ -148,7 +148,7 @@ _capm() {
         --model|-model) return 0 ;;
       esac
       case "$cur" in
-        -*) _capm_words "--yes --allow-unenforced-egress --allow-global-anthropic-secret --accept-new-owner --accept-permission-changes --accept-changed-digest --workdir --model-url --model-key --model"; return 0 ;;
+        -*) _capm_words "--yes --allow-unenforced-egress --allow-global-anthropic-secret --accept-new-owner --accept-new-signer --allow-invalid-signature --accept-permission-changes --accept-changed-digest --workdir --model-url --model-key --model"; return 0 ;;
       esac
       _capm_ref_or_dir
       return 0

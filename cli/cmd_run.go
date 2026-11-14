@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"flag"
@@ -23,7 +24,7 @@ import (
 	"github.com/MasonD-007/capm/manifest"
 )
 
-const runUse = "usage: capm run [--yes] [--workdir DIR] [--model-url URL] [--model-key KEY] [--model NAME] [--allow-unenforced-egress] [--allow-global-anthropic-secret] [--accept-new-owner] [--accept-permission-changes] [--accept-changed-digest] <dir | user/name[@version]>"
+const runUse = "usage: capm run [--yes] [--workdir DIR] [--model-url URL] [--model-key KEY] [--model NAME] [--allow-unenforced-egress] [--allow-global-anthropic-secret] [--accept-new-owner] [--accept-new-signer] [--allow-invalid-signature] [--accept-permission-changes] [--accept-changed-digest] <dir | user/name[@version]>"
 
 // runDefaults fills in the interactive pieces of e that tests may inject.
 func (e env) runDefaults(stdout, stderr io.Writer) env {
@@ -57,6 +58,8 @@ type runFlags struct {
 	yes, allowUnenforced        bool
 	allowGlobalAnthropic        bool
 	acceptNewOwner              bool
+	acceptNewSigner             bool
+	allowInvalidSignature       bool
 	acceptPermChanges           bool
 	acceptChangedDigest         bool
 	workdir, modelURL, modelKey string
@@ -74,6 +77,8 @@ func parseRunFlags(args []string, stderr io.Writer) (runFlags, error) {
 	fs.BoolVar(&f.allowUnenforced, "allow-unenforced-egress", false, "")
 	fs.BoolVar(&f.allowGlobalAnthropic, "allow-global-anthropic-secret", false, "")
 	fs.BoolVar(&f.acceptNewOwner, "accept-new-owner", false, "")
+	fs.BoolVar(&f.acceptNewSigner, "accept-new-signer", false, "")
+	fs.BoolVar(&f.allowInvalidSignature, "allow-invalid-signature", false, "")
 	fs.BoolVar(&f.acceptPermChanges, "accept-permission-changes", false, "")
 	fs.BoolVar(&f.acceptChangedDigest, "accept-changed-digest", false, "")
 	fs.StringVar(&f.workdir, "workdir", "", "")
@@ -137,6 +142,7 @@ func runCmd(args []string, stdout, stderr io.Writer, e env) int {
 		regOwner, regName string
 		res               client.Resolved
 		pin               pinInfo
+		sigOut            sigOutcome
 		since             sinceLastRun
 	)
 	if _, serr := os.Stat(f.target); serr != nil {
@@ -148,7 +154,8 @@ func runCmd(args []string, stdout, stderr io.Writer, e env) int {
 			}
 			return fail("%v", serr)
 		}
-		m, bundleDir, res, err = fetchToTemp(e, owner, name, spec, e.tempRoot, "capm-run-bundle-*")
+		var sum [sha256.Size]byte
+		m, bundleDir, res, sum, err = fetchToTemp(e, owner, name, spec, e.tempRoot, "capm-run-bundle-*")
 		if bundleDir != "" {
 			defer os.RemoveAll(bundleDir)
 		}
@@ -161,8 +168,17 @@ func runCmd(args []string, stdout, stderr io.Writer, e env) int {
 			return fail("%v", err)
 		}
 		ks, regOwner, regName = newKnownStore(e, stderr), owner, name
+		// Order: digest and manifest name/version (fetchToTemp) -> signature ->
+		// owner pinning -> permission diff -> confirmation.
+		rec, recorded := ks.get(e.registry, owner, name)
+		var okSig bool
+		if sigOut, okSig = e.checkSignature(sigStage{cmd: "run", stderr: stderr, owner: owner, name: name, res: res,
+			digest: sum, m: m, rec: rec, recorded: recorded,
+			flags: sigFlags{acceptNewOwner: f.acceptNewOwner, acceptNewSigner: f.acceptNewSigner, allowInvalid: f.allowInvalidSignature}}); !okSig {
+			return 1
+		}
 		var okPin bool
-		if pin, okPin = ks.gateOwner("run", stderr, e.registry, owner, name, res.OwnerID, f.acceptNewOwner); !okPin {
+		if pin, okPin = ks.gateOwner("run", stderr, e.registry, owner, name, sigOut.ownerID(res.OwnerID), f.acceptNewOwner); !okPin {
 			return 1
 		}
 		var okLast bool
@@ -249,7 +265,7 @@ func runCmd(args []string, stdout, stderr io.Writer, e env) int {
 
 	if ks != nil {
 		// The user has confirmed (or flags authorised) this run: remember it.
-		ks.recordRun(stderr, e.registry, regOwner, regName, pin, res, m)
+		ks.recordRun(stderr, e.registry, regOwner, regName, pin, sigOut, res, m)
 	}
 
 	opts.Secrets = map[string]string{}

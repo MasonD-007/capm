@@ -94,6 +94,8 @@ complete -c capm -n '__capm_at push' -a '(__fish_complete_directories)'
 
 # capm pull
 complete -c capm -n '__capm_at pull' -l accept-new-owner
+complete -c capm -n '__capm_at pull' -l accept-new-signer
+complete -c capm -n '__capm_at pull' -l allow-invalid-signature
 complete -c capm -n '__capm_at pull' -a '(__capm_bundles)'
 
 # capm inspect
@@ -106,6 +108,8 @@ complete -c capm -n '__capm_at run' -l yes -s y
 complete -c capm -n '__capm_at run' -l allow-unenforced-egress
 complete -c capm -n '__capm_at run' -l allow-global-anthropic-secret
 complete -c capm -n '__capm_at run' -l accept-new-owner
+complete -c capm -n '__capm_at run' -l accept-new-signer
+complete -c capm -n '__capm_at run' -l allow-invalid-signature
 complete -c capm -n '__capm_at run' -l accept-permission-changes
 complete -c capm -n '__capm_at run' -l accept-changed-digest
 complete -c capm -n '__capm_at run' -l workdir -r -a '(__fish_complete_directories)'

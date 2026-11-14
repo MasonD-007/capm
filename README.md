@@ -120,7 +120,7 @@ capm inspect   Show a bundle's declared permissions and risk labels
 capm login     Sign in with GitHub
 capm push      Publish a bundle
 capm search    Find bundles (also: capm list)
-capm pull      Download a bundle and check its sha256 digest (bundles are not signed)
+capm pull      Download a bundle; check its sha256 digest and, when it is signed, its signature
 capm run       Launch a bundle in a Docker Sandbox
 ```
 

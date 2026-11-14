@@ -26,7 +26,10 @@ import (
 //	        "ownerId": 123,
 //	        "pinnedAt": "2026-11-11T10:00:00Z",
 //	        "lastRun": {"version": "1.0.0", "digest": "sha256:...",
-//	                    "manifest": {...}, "at": "2026-11-11T10:00:00Z"}
+//	                    "manifest": {...}, "at": "2026-11-11T10:00:00Z"},
+//	        "signerPin": {"ownerId": 123, "repositoryId": 456,
+//	                      "repository": "owner/repo", "verifiedVersion": "1.0.0",
+//	                      "at": "2026-11-11T10:00:00Z"}
 //	      }
 //	    }
 //	  }
@@ -49,8 +52,37 @@ type knownRecord struct {
 	OwnerID  int64     `json:"ownerId"`
 	PinnedAt time.Time `json:"pinnedAt"`
 	LastRun  *lastRun  `json:"lastRun,omitempty"`
+	// SignerPin is the GitHub repository whose workflow signed a version of this
+	// bundle that capm verified, pinned on first use. nil: no signed version
+	// has been verified on this machine. Older files have no such member.
+	SignerPin *signerPin `json:"signerPin,omitempty"`
 
 	extra map[string]json.RawMessage
+}
+
+// signerPin is what a verified signature taught capm about who signs this
+// bundle. Every value comes from the verified certificate, never from the
+// registry.
+type signerPin struct {
+	OwnerID      int64  `json:"ownerId"`
+	RepositoryID int64  `json:"repositoryId"`
+	Repository   string `json:"repository"` // owner/repo, for display
+	// VerifiedVersion is the newest version whose signature capm verified.
+	VerifiedVersion string    `json:"verifiedVersion"`
+	At              time.Time `json:"at"`
+
+	extra map[string]json.RawMessage
+}
+
+type signerAlias signerPin
+
+func (p *signerPin) UnmarshalJSON(b []byte) (err error) {
+	p.extra, err = unmarshalKeepExtra(b, (*signerAlias)(p), "ownerId", "repositoryId", "repository", "verifiedVersion", "at")
+	return err
+}
+
+func (p signerPin) MarshalJSON() ([]byte, error) {
+	return marshalWithExtra(signerAlias(p), p.extra)
 }
 
 type knownState struct {
@@ -66,7 +98,7 @@ type (
 )
 
 func (r *knownRecord) UnmarshalJSON(b []byte) (err error) {
-	r.extra, err = unmarshalKeepExtra(b, (*recordAlias)(r), "ownerId", "pinnedAt", "lastRun")
+	r.extra, err = unmarshalKeepExtra(b, (*recordAlias)(r), "ownerId", "pinnedAt", "lastRun", "signerPin")
 	return err
 }
 

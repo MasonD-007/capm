@@ -13,6 +13,7 @@ import (
 
 type outdatedRow struct {
 	key, ran, latest, changes string
+	signed                    string // the registry's claim for latest: "signed", "unsigned", or "" when it did not say
 }
 
 // outdated implements `capm outdated`: for every bundle recorded in known.json
@@ -53,10 +54,28 @@ func outdated(args []string, stdout, stderr io.Writer, e env) int {
 	}
 
 	if len(rows) > 0 {
-		tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(tw, "owner/name\tran\tlatest\tchanges")
+		// The signed column appears only when the registry said something
+		// about signatures; an older registry's output is unchanged.
+		showSigned := false
 		for _, r := range rows {
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", r.key, r.ran, r.latest, r.changes)
+			showSigned = showSigned || r.signed != ""
+		}
+		tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
+		if showSigned {
+			fmt.Fprintln(tw, "owner/name\tran\tlatest\tsigned (registry's claim)\tchanges")
+		} else {
+			fmt.Fprintln(tw, "owner/name\tran\tlatest\tchanges")
+		}
+		for _, r := range rows {
+			if showSigned {
+				s := r.signed
+				if s == "" {
+					s = "-"
+				}
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", r.key, r.ran, r.latest, s, r.changes)
+			} else {
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", r.key, r.ran, r.latest, r.changes)
+			}
 		}
 		tw.Flush()
 	} else {
@@ -113,7 +132,10 @@ func checkOutdated(c *client.Client, en knownEntry) (outdatedRow, int) {
 	}
 	row.latest = client.Sanitize(res.Version)
 
-	md, err := c.Metadata(owner, name, res.Version)
+	md, signedClaim, err := c.MetadataWithSigned(owner, name, res.Version)
+	if signedClaim != nil {
+		row.signed = signedWord(*signedClaim)
+	}
 	if err != nil {
 		row.changes = "could not fetch the new manifest: " + client.Sanitize(err.Error())
 		return row, stateDiffers

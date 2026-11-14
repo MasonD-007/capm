@@ -75,12 +75,122 @@ A README can still lie, and its links can point anywhere. The CLI does not
 print it. Removed versions serve no README, and the versions list endpoint
 never includes README bodies.
 
-## No signing; identity is a GitHub login
+## Signatures
 
-Bundles are not signed in v1. `capm pull` checks the download against the
-sha256 digest the registry reports, which protects against corruption in
-transit, not against a malicious or compromised registry. The only publisher
-identity is the GitHub login in the bundle name (`login/name`).
+Some bundle versions can carry a Sigstore signature made by a GitHub Actions
+workflow. `capm pull` and `capm run` look for one, check it offline, and print
+one `signature:` line saying what was and was not proven. Most versions are
+unsigned (signing is CI-only; a publish from a laptop is never signed), and an
+unsigned version is fully usable: its only publisher identity is then the GitHub
+login in the bundle name (`login/name`), as reported by the registry. The
+digest check that `pull` and `run` always do protects against corruption in
+transit, not against a malicious or compromised registry.
+
+**What a verified signature proves.** `signature: verified` means all of this,
+checked by capm against the Sigstore trust data compiled into the binary, with
+no network:
+
+- a GitHub Actions workflow in repository `owner/repo` (named in the line, with
+  the workflow file, ref and short commit),
+- in a repository owned by GitHub account id N (the id is pinned, see below),
+- signed exactly the bytes capm downloaded (the SHA-256 capm computed itself,
+  not the one the registry reports), and
+- the signing is recorded in the public Rekor transparency log, and the
+  short-lived signing certificate chained to Sigstore's Fulcio CA.
+
+capm also requires the manifest inside the tarball to name the bundle and
+version you asked for, because a signature binds bytes, not a name or version.
+Without that check an old signed tarball could be served under a new version.
+This manifest check applies to every registry download, signed or not.
+
+**What it does not prove.** That the bundle's contents are benign or reviewed;
+that the workflow or any Action it ran is trustworthy; that the account owner
+(rather than anyone who can run a workflow in that repository) triggered the
+run; which branch or reviewer approved the code; that the repository named in
+`metadata.repository` is the one that signed (capm notes a mismatch). A
+verified signature is not revoked if the repository or account is later
+compromised: signatures verify forever, as of the trust data in your binary. And
+it does not prove that an unsigned version is bad, or that a signed one is
+newer, better or the latest.
+
+**Most bundles are unsigned.** capm says `signature: none (this version is
+unsigned; its publisher is identified only by the registry)` and proceeds
+exactly as it always did. That line is not a warning about the bundle.
+
+**First use and pinning.** The first time capm verifies a signature for
+`owner/name` on a registry it pins, in `known.json`, from the verified
+certificate (never from the registry): the owner's account id, the signing
+repository's id and name, and the version. Later signed versions must come from
+the same repository id, or capm refuses and tells you the bundle used to be
+signed from repository A and is now signed from B; `--accept-new-signer`
+accepts and re-pins. A signature binds a bundle to one repository, not to
+"any repository the account owns". The owner id uses the same pin as owner
+pinning: a certificate whose owner id differs from the id you pinned gets the
+existing "its owner changed" refusal and `--accept-new-owner`. On first use capm
+also compares the certificate's owner id with the `ownerId` the registry
+reports and refuses if they differ; they agree for organisation bundles too (the
+registry reports the organisation's id and a workflow in an organisation
+repository signs with that id), and the comparison is skipped when the registry
+reports no id. An organisation bundle signed from a member's personal repository
+therefore does not verify: the certificate's owner is the member. Limits: a pin
+protects only someone who used the bundle before; an attacker who legitimately
+owns a re-registered login can sign bundles that pass on somebody's first use
+(the transparency log lets third parties notice, `known.json` does not).
+
+**No downgrade refusal.** A later unsigned version is not blocked, because most
+publishers do not sign and a bundle may be published from a laptop. capm says so
+(`signature: note: version 1.0.0, which you used earlier, was signed from
+owner/repo; this version is not signed`) and does nothing else. The consequence:
+an attacker who takes over the registry, or the owner's account, can publish a
+new unsigned version of a bundle that used to be signed, and `capm run
+owner/name` (latest) will accept it, with the note. Pin exact versions
+(`owner/name@1.2.3`); a version you have already used cannot change its bytes
+(`--accept-changed-digest`) or its signer (`--accept-new-signer`) silently.
+
+**When capm refuses.** `--yes` never overrides these:
+
+- the signature does not verify (it is for a different digest, owner or
+  repository, is not from a GitHub Actions workflow, is malformed, or its log
+  proof does not check out). capm names only the broad reason, never text taken
+  from the signature;
+- the registry and the certificate disagree about who owns the name;
+- the signing repository or owner changed from the one you pinned;
+- the signature cannot be fetched. Only a clean 404 means "unsigned". Any other
+  failure refuses, so that blocking or breaking the signature request cannot
+  make a signed version look unsigned.
+
+**Stale trust data.** The Sigstore trust root is compiled into each capm
+release (there is no online refresh; capm contacts no Sigstore service). If a
+signature uses a log or certificate authority this build has never heard of,
+capm refuses with "this version of capm cannot check this signature because its
+built-in trust material is out of date or does not cover the signer" and tells
+you to run `capm self-update` (or `brew upgrade capm`). Offline, "Sigstore
+rotated after this build" cannot be told from "signed under a CA capm never
+trusted", so capm never treats it as unsigned.
+
+**The two override flags.** `--accept-new-signer` (pull, run) re-pins the
+signing repository after you have decided the new one is the publisher's:
+reasonable when the project renamed or moved its repository (a rename keeps the
+id and needs no flag), unreasonable when you cannot explain the change.
+`--allow-invalid-signature` (pull, run) continues as if the version were
+unsigned and prints a loud warning; it records nothing as verified and changes
+no pin. Reasonable when you have read the bundle yourself and the signature is
+the only thing in the way (for example the registry is broken or your capm is
+too old to update right now); never reasonable as a default. There is no
+environment-variable override.
+
+**`capm inspect`.** It does not download the bundle, so it can only check that a
+signature matches the digest the registry reports. It then prints `signature:
+valid for the digest the registry reports (...); the bundle itself was not
+downloaded, so capm did not check it against this signature` and shows whether
+the signer matches your pin. It never writes `known.json`, and it exits 1 when a
+signature the registry claims does not check out. `capm outdated` shows a
+`signed`/`unsigned` word per row, labelled as the registry's claim, which capm
+has not checked.
+
+Signing publishes the repository, commit, workflow path and run URL to a public,
+permanent log. Publishing signed bundles is a separate step from this one (this
+change makes the CLI able to check signatures).
 
 The registry can now store one signature (a Sigstore bundle) per version, which
 an authorised publisher uploads from CI; it is write-once, and the registry
@@ -102,6 +212,14 @@ getting-started). On a later `run` or `pull`, a different ID makes capm refuse,
 showing the pinned and the new ID and saying the name may have been taken over
 by a different GitHub account. `--accept-new-owner` proceeds and re-pins.
 `capm inspect` shows the pin status and never writes it.
+
+For a signed version the owner id comes from the verified certificate (see
+"Signatures"), which must agree with the registry's, and capm also pins the
+signing repository's id. A re-registered login has a different owner id, so its
+signed versions are refused as an owner change (`--accept-new-owner`); a signed
+version from another repository under the same owner is refused too
+(`--accept-new-signer`). An unsigned version from a re-registered login is still
+caught only by the owner-id pin, as before.
 
 Limits: pinning protects only a user who ran or pulled the bundle before, on
 that machine; it does nothing on the first use, so the registry is still

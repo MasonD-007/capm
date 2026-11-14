@@ -48,7 +48,8 @@ type Config struct {
 // return ok for a full-power token (see Config.AuthDetail for scoped ones).
 type AuthFunc func(r *http.Request) (id int64, login string, ok bool)
 
-// publishRoute is the one authenticated route a publish-scoped token may call.
+// publishRoute is the first of the two authenticated routes a publish-scoped
+// token may call (the other is signatureRoute).
 const publishRoute = "PUT /v1/bundles/{owner}/{name}/{version}"
 
 // ScopePublish is the scope of tokens minted for CI: publish only.
@@ -59,8 +60,11 @@ type API struct {
 	authenticate AuthFunc
 	cfg          Config
 	publishLim   *Limiter
-	reportLim    *Limiter
-	reportSalt   []byte
+	// signLim is the separate per-user hourly allowance for signature uploads
+	// (same size as the publish one).
+	signLim    *Limiter
+	reportLim  *Limiter
+	reportSalt []byte
 	// countDownload records one successful download; tests replace it.
 	countDownload func(owner, name, version string) error
 	// authzHook, when set (tests only), hears the route pattern of every call
@@ -85,7 +89,7 @@ func NewWithConfig(s *store.Store, auth AuthFunc, cfg Config) *API {
 		salt = newReportSalt()
 	}
 	return &API{store: s, authenticate: auth, cfg: cfg, reportSalt: salt,
-		publishLim: NewLimiter(cfg.PublishPerHour, time.Hour, cfg.Now), countDownload: s.CountDownload,
+		publishLim: NewLimiter(cfg.PublishPerHour, time.Hour, cfg.Now), signLim: NewLimiter(cfg.PublishPerHour, time.Hour, cfg.Now), countDownload: s.CountDownload,
 		reportLim: NewLimiter(cfg.ReportPerHour, time.Hour, cfg.Now)}
 }
 
@@ -99,6 +103,8 @@ func (a *API) register(handle func(pattern string, h func(http.ResponseWriter, *
 	handle("GET /v1/bundles/{owner}/{name}/{version}/download", a.download)
 	handle("GET /v1/bundles/{owner}/{name}/resolve", a.resolve)
 	handle(publishRoute, a.publish)
+	handle(signatureRoute, a.putSignature)
+	handle("GET /v1/bundles/{owner}/{name}/{version}/signature", a.getSignature)
 	handle("POST /v1/bundles/{owner}/{name}/report", a.report)
 	handle("POST /v1/bundles/{owner}/{name}/{version}/yank", a.yank(true))
 	handle("DELETE /v1/bundles/{owner}/{name}/{version}/yank", a.yank(false))
@@ -132,7 +138,7 @@ const scopeRefused = "this token is publish-scoped (issued to a CI workflow) and
 
 // caller authenticates r for a route that needs a signed-in user and writes
 // the 401 or 403 itself. Scoped tokens are allow-listed here, in one place:
-// a "publish" token passes only on publishRoute, and a token whose scope is
+// a "publish" token passes only on publishRoute and signatureRoute, and a token whose scope is
 // anything else (including one a future release adds) is refused everywhere.
 // Every handler that needs an identity calls this, so a new route is closed to
 // scoped tokens by default.
@@ -142,7 +148,7 @@ func (a *API) caller(w http.ResponseWriter, r *http.Request) (store.Token, bool)
 		writeErr(w, 401, "authentication required")
 		return store.Token{}, false
 	}
-	if tk.Scope != "" && !(tk.Scope == ScopePublish && r.Pattern == publishRoute) {
+	if tk.Scope != "" && !(tk.Scope == ScopePublish && scopedPublishRoute(r.Pattern)) {
 		writeErr(w, 403, scopeRefused)
 		return store.Token{}, false
 	}
@@ -257,6 +263,9 @@ func (a *API) list(w http.ResponseWriter, r *http.Request) {
 		// anything about the bundle's contents.
 		Repository         string `json:"repository,omitempty"`
 		RepositoryVerified bool   `json:"repositoryVerified"`
+		// Signed: the latest installable version has a signature file. The
+		// registry does not verify it; capm does.
+		Signed bool `json:"signed"`
 		// Downloads30d is the raw count of download requests for the bundle's
 		// non-removed versions over the last 30 UTC days. Anyone can inflate
 		// it; it is not a trust or quality signal and never affects search.
@@ -281,6 +290,7 @@ func (a *API) list(w http.ResponseWriter, r *http.Request) {
 			it.RiskLabels = v.Manifest.RiskLabels()
 			it.Risk = manifest.HighestSeverity(it.RiskLabels)
 			it.Repository, it.RepositoryVerified = v.Manifest.Metadata.Repository, v.RepoVerified
+			it.Signed = v.Signed
 		}
 		return it, nil
 	}
@@ -369,10 +379,13 @@ func (a *API) versions(w http.ResponseWriter, r *http.Request) {
 		// an organisation's bundle; absent for a user's own namespace.
 		PublishedBy string `json:"publishedBy,omitempty"`
 		// Repository and RepositoryVerified: see the list's fields.
-		Repository         string           `json:"repository,omitempty"`
-		RepositoryVerified bool             `json:"repositoryVerified"`
-		Summary            manifest.Summary `json:"summary"`
-		CreatedAt          time.Time        `json:"createdAt"`
+		Repository         string `json:"repository,omitempty"`
+		RepositoryVerified bool   `json:"repositoryVerified"`
+		// Signed: a signature file was uploaded for this version (never for
+		// a removed one). It is not verified by the registry.
+		Signed    bool             `json:"signed"`
+		Summary   manifest.Summary `json:"summary"`
+		CreatedAt time.Time        `json:"createdAt"`
 		// Removed versions stay listed (their number can never be reused)
 		// but their manifest is withheld: a takedown may be about its content.
 		Removed       bool   `json:"removed"`
@@ -397,7 +410,7 @@ func (a *API) versions(w http.ResponseWriter, r *http.Request) {
 		if v.Removed {
 			m = manifest.Manifest{}
 		}
-		out = append(out, item{Version: v.Version, Digest: v.Digest, Yanked: v.Yanked, Manifest: m, OwnerKind: v.OwnerKind, PublishedBy: v.PublishedBy, Repository: m.Metadata.Repository, RepositoryVerified: v.RepoVerified && !v.Removed, Summary: m.EnforcedSummary(), CreatedAt: v.CreatedAt, Removed: v.Removed, RemovedReason: v.RemovedReason, Downloads: dl[v.Version].Total, Downloads30d: dl[v.Version].Last30d, PublishedVia: publishedVia(v.PublishedVia)})
+		out = append(out, item{Version: v.Version, Digest: v.Digest, Yanked: v.Yanked, Manifest: m, OwnerKind: v.OwnerKind, PublishedBy: v.PublishedBy, Repository: m.Metadata.Repository, RepositoryVerified: v.RepoVerified && !v.Removed, Signed: v.Signed && !v.Removed, Summary: m.EnforcedSummary(), CreatedAt: v.CreatedAt, Removed: v.Removed, RemovedReason: v.RemovedReason, Downloads: dl[v.Version].Total, Downloads30d: dl[v.Version].Last30d, PublishedVia: publishedVia(v.PublishedVia)})
 	}
 	writeJSON(w, 200, out)
 }
@@ -431,6 +444,7 @@ func (a *API) metadata(w http.ResponseWriter, r *http.Request) {
 	}
 	out := map[string]any{"ownerId": pick.OwnerID, "ownerKind": pick.OwnerKind, "version": pick.Version, "digest": pick.Digest, "yanked": pick.Yanked, "manifest": pick.Manifest, "summary": pick.Manifest.EnforcedSummary(), "riskLabels": pick.Manifest.RiskLabels(), "createdAt": pick.CreatedAt}
 	out["repositoryVerified"] = pick.RepoVerified
+	out["signed"] = pick.Signed
 	if r := pick.Manifest.Metadata.Repository; r != "" {
 		out["repository"] = r
 	}

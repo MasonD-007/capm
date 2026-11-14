@@ -1,7 +1,9 @@
 package auth_test
 
 import (
+	"bytes"
 	"crypto/sha256"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,6 +16,32 @@ import (
 )
 
 const publishRoute = "PUT /v1/bundles/{owner}/{name}/{version}"
+const signatureRoute = "PUT /v1/bundles/{owner}/{name}/{version}/signature"
+
+// scopedAllowed is the complete set of route patterns a publish-scoped token
+// may call. Adding to it is a deliberate security decision; the sweep below
+// asserts that exactly these two answer a scoped token and every other
+// authenticated route refuses it.
+var scopedAllowed = map[string]bool{publishRoute: true, signatureRoute: true}
+
+const sigJSON = `{"mediaType":"application/vnd.dev.sigstore.bundle.v0.3+json","verificationMaterial":{},"messageSignature":{}}`
+
+// doJSON is e.do with a JSON content type (signature uploads need one).
+func (e *env) doJSON(t *testing.T, method, path, token string, body []byte) (int, []byte) {
+	t.Helper()
+	req, _ := http.NewRequest(method, e.srv.URL+path, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, b
+}
 
 // scopeEnv wires the handlers exactly as cmd/main.go does, including the
 // scope-aware AuthDetail hook, and makes alice (id 42) an admin so that a
@@ -109,15 +137,16 @@ func TestLegacyAuthenticateRefusesScopedTokens(t *testing.T) {
 // fails until its author decides, and if it needs auth the gate is already
 // there.
 var publicRoutes = map[string]bool{
-	"GET /v1/bundles":                                   true,
-	"GET /v1/bundles/{owner}/{name}":                    true,
-	"GET /v1/bundles/{owner}/{name}/{version}":          true,
-	"GET /v1/bundles/{owner}/{name}/{version}/download": true,
-	"GET /v1/bundles/{owner}/{name}/resolve":            true,
-	"POST /v1/bundles/{owner}/{name}/report":            true,
-	"POST /v1/auth/device":                              true,
-	"POST /v1/auth/token":                               true,
-	"POST /v1/auth/oidc":                                true,
+	"GET /v1/bundles":                                    true,
+	"GET /v1/bundles/{owner}/{name}":                     true,
+	"GET /v1/bundles/{owner}/{name}/{version}":           true,
+	"GET /v1/bundles/{owner}/{name}/{version}/download":  true,
+	"GET /v1/bundles/{owner}/{name}/{version}/signature": true,
+	"GET /v1/bundles/{owner}/{name}/resolve":             true,
+	"POST /v1/bundles/{owner}/{name}/report":             true,
+	"POST /v1/auth/device":                               true,
+	"POST /v1/auth/token":                                true,
+	"POST /v1/auth/oidc":                                 true,
 }
 
 func TestScopedTokenIsRefusedOnEveryAuthenticatedRoute(t *testing.T) {
@@ -133,26 +162,27 @@ func TestScopedTokenIsRefusedOnEveryAuthenticatedRoute(t *testing.T) {
 		t.Fatalf("only %d routes enumerated: %v", len(routes), routes)
 	}
 	repl := strings.NewReplacer("{owner}", "alice", "{name}", "x", "{version}", "1.0.0", "{id}", "1", "{user}", "alice")
-	seenPublish, seenGated := false, 0
+	seenAllowed, seenGated := map[string]bool{}, 0
 	for _, route := range routes {
 		method, pat, _ := strings.Cut(route, " ")
 		path := repl.Replace(pat)
-		if route == publishRoute {
-			seenPublish = true
-			path = "/v1/bundles/alice/x/2.0.0"
-		}
 		var body []byte
 		if method == "PUT" || method == "POST" {
 			body = []byte(`{"reason":"x"}`)
 		}
-		if route == publishRoute {
+		switch route {
+		case publishRoute:
+			path = "/v1/bundles/alice/x/2.0.0"
 			body = bundle(t, "x", "2.0.0")
+		case signatureRoute:
+			body = []byte(sigJSON)
 		}
-		code, resp := e.do(t, method, path, tok, body)
+		code, resp := e.doJSON(t, method, path, tok, body)
 		switch {
-		case route == publishRoute:
+		case scopedAllowed[route]:
+			seenAllowed[route] = true
 			if code != 201 {
-				t.Errorf("%s: scoped token must publish, got %d %s", route, code, resp)
+				t.Errorf("%s: scoped token must be allowed, got %d %s", route, code, resp)
 			}
 		case publicRoutes[route]:
 			if code == 403 || code == 401 {
@@ -165,8 +195,9 @@ func TestScopedTokenIsRefusedOnEveryAuthenticatedRoute(t *testing.T) {
 			}
 		}
 	}
-	if !seenPublish || seenGated < 15 {
-		t.Fatalf("publish seen %v, gated routes %d", seenPublish, seenGated)
+	// Precisely two patterns answer a scoped token, and both were exercised.
+	if len(scopedAllowed) != 2 || len(seenAllowed) != 2 || seenGated < 15 {
+		t.Fatalf("allowed patterns seen %v (of %v), gated routes %d", seenAllowed, scopedAllowed, seenGated)
 	}
 	// The token is still alive afterwards (nothing above revoked it).
 	if code, _ := e.do(t, "PUT", "/v1/bundles/alice/x/3.0.0", tok, bundle(t, "x", "3.0.0")); code != 201 {
@@ -193,5 +224,28 @@ func TestFullTokenStillUsesTokenRoutes(t *testing.T) {
 		if code, b := e.do(t, "GET", p, full, nil); code != 200 {
 			t.Errorf("%s: %d %s", p, code, b)
 		}
+	}
+}
+
+// A scoped token may sign only under the account it was minted for, and a
+// token with any other scope is refused on the signature route.
+func TestScopedTokenSignsOnlyUnderItsOwnLogin(t *testing.T) {
+	e := setupScoped(t, api.Config{})
+	tok := e.mint(t, "scoped-6", "publish", time.Now().Add(15*time.Minute))
+	if code, b := e.do(t, "PUT", "/v1/bundles/alice/x/1.0.0", tok, bundle(t, "x", "1.0.0")); code != 201 {
+		t.Fatalf("publish: %d %s", code, b)
+	}
+	if code, b := e.doJSON(t, "PUT", "/v1/bundles/alice/x/1.0.0/signature", tok, []byte(sigJSON)); code != 201 {
+		t.Fatalf("own namespace: %d %s", code, b)
+	}
+	if code, _ := e.doJSON(t, "PUT", "/v1/bundles/bob/x/1.0.0/signature", tok, []byte(sigJSON)); code != 403 {
+		t.Fatalf("other namespace: %d", code)
+	}
+	other := e.mint(t, "scoped-7", "somethingelse", time.Now().Add(15*time.Minute))
+	if code, _ := e.doJSON(t, "PUT", "/v1/bundles/alice/x/1.0.0/signature", other, []byte(sigJSON)); code != 403 {
+		t.Fatalf("unknown scope: %d", code)
+	}
+	if code, _ := e.doJSON(t, "PUT", "/v1/bundles/alice/x/1.0.0/signature", "", []byte(sigJSON)); code != 401 {
+		t.Fatalf("anonymous: %d", code)
 	}
 }

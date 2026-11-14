@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"os"
@@ -64,11 +65,12 @@ func inspectRemote(owner, name, spec string, diff bool, oldVersion string, stdou
 		failFetch(stderr, "inspect", err)
 		return 1
 	}
-	md, err := c.Metadata(owner, name, res.Version)
+	md, signedClaim, err := c.MetadataWithSigned(owner, name, res.Version)
 	if err != nil {
 		failFetch(stderr, "inspect", err)
 		return 1
 	}
+	signed := signedClaim != nil && *signedClaim // absent (an older registry) means unsigned
 	m := &md.Manifest
 	if err := m.Validate(); err != nil {
 		fmt.Fprintf(stderr, "capm inspect: registry returned an invalid manifest:\n%s\n", manifest.DisplaySafe(err.Error()))
@@ -89,6 +91,9 @@ func inspectRemote(owner, name, spec string, diff bool, oldVersion string, stdou
 	for _, l := range describeProvenance(m, md) {
 		fmt.Fprintln(stderr, l)
 	}
+	if !e.inspectSignature(c, stderr, owner, name, res, md, signed, rec, recorded) {
+		return 1
+	}
 	if diff {
 		return inspectDiff(c, ks, e, owner, name, res, md, oldVersion, stdout, stderr)
 	}
@@ -100,23 +105,25 @@ func inspectRemote(owner, name, spec string, diff bool, oldVersion string, stdou
 // fetchToTemp downloads owner/name@spec and unpacks it into a new directory
 // under root (os.TempDir() when ""). The caller removes the returned
 // directory whenever it is non-empty, including on error.
-func fetchToTemp(e env, owner, name, spec, root, pattern string) (*manifest.Manifest, string, client.Resolved, error) {
+func fetchToTemp(e env, owner, name, spec, root, pattern string) (*manifest.Manifest, string, client.Resolved, [sha256.Size]byte, error) {
+	var sum [sha256.Size]byte
 	tarball, res, err := fetch(client.New(e.registry, ""), owner, name, spec)
 	if err != nil {
-		return nil, "", res, err
+		return nil, "", res, sum, err
 	}
+	sum = sha256.Sum256(tarball) // capm's own digest, for the signature check
 	tmp, err := os.MkdirTemp(root, pattern)
 	if err != nil {
-		return nil, "", res, err
+		return nil, "", res, sum, err
 	}
 	m, err := manifest.UnpackTo(tarball, tmp)
 	if err != nil {
-		return nil, tmp, res, fmt.Errorf("invalid bundle: %w", err)
+		return nil, tmp, res, sum, fmt.Errorf("invalid bundle: %w", err)
 	}
 	if err := checkBundleIdentity(m, owner, name, res.Version); err != nil {
-		return nil, tmp, res, err
+		return nil, tmp, res, sum, err
 	}
-	return m, tmp, res, nil
+	return m, tmp, res, sum, nil
 }
 
 // describeProvenance is what `capm inspect` says about where a registry

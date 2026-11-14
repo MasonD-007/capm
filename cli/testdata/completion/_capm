@@ -130,7 +130,7 @@ _capm() {
       return 0
       ;;
     pull)
-      if [[ $PREFIX == -* ]]; then vals=(--accept-new-owner); compadd -- $vals; return 0; fi
+      if [[ $PREFIX == -* ]]; then vals=(--accept-new-owner --accept-new-signer --allow-invalid-signature); compadd -- $vals; return 0; fi
       _capm_bundles
       return 0
       ;;
@@ -148,7 +148,7 @@ _capm() {
         --model-key|-model-key) return 0 ;;
         --model|-model) return 0 ;;
       esac
-      if [[ $PREFIX == -* ]]; then vals=(--yes --allow-unenforced-egress --allow-global-anthropic-secret --accept-new-owner --accept-permission-changes --accept-changed-digest --workdir --model-url --model-key --model); compadd -- $vals; return 0; fi
+      if [[ $PREFIX == -* ]]; then vals=(--yes --allow-unenforced-egress --allow-global-anthropic-secret --accept-new-owner --accept-new-signer --allow-invalid-signature --accept-permission-changes --accept-changed-digest --workdir --model-url --model-key --model); compadd -- $vals; return 0; fi
       case $PREFIX in ./*|../*|/*|\~*|.|..) _files -/; return 0 ;; esac
       _capm_bundles
       _files -/

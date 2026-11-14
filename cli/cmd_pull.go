@@ -91,13 +91,18 @@ func warnYanked(stderr io.Writer, owner, name string, r client.Resolved) {
 
 // pull downloads user/name[@version] into ./<name>/.
 func pull(args []string, stdout, stderr io.Writer, e env) int {
-	const use = "usage: capm pull [--accept-new-owner] user/name[@version]"
-	acceptNewOwner := false
+	const use = "usage: capm pull [--accept-new-owner] [--accept-new-signer] [--allow-invalid-signature] user/name[@version]"
+	var fl sigFlags
 	var pos []string
 	for _, a := range args {
-		if a == "--accept-new-owner" {
-			acceptNewOwner = true
-		} else {
+		switch a {
+		case "--accept-new-owner":
+			fl.acceptNewOwner = true
+		case "--accept-new-signer":
+			fl.acceptNewSigner = true
+		case "--allow-invalid-signature":
+			fl.allowInvalid = true
+		default:
 			pos = append(pos, a)
 		}
 	}
@@ -125,11 +130,6 @@ func pull(args []string, stdout, stderr io.Writer, e env) int {
 		failFetch(stderr, "pull", err)
 		return 1
 	}
-	ks := newKnownStore(e, stderr)
-	pin, ok := ks.gateOwner("pull", stderr, e.registry, owner, name, res.OwnerID, acceptNewOwner)
-	if !ok {
-		return 1
-	}
 	// Unpack beside the destination, then rename, so a failure leaves nothing behind.
 	tmp, err := os.MkdirTemp(".", ".capm-pull-*")
 	if err != nil {
@@ -146,14 +146,30 @@ func pull(args []string, stdout, stderr io.Writer, e env) int {
 		fmt.Fprintf(stderr, "capm pull: %v\n", err)
 		return 1
 	}
+	// Order: digest (in fetch) -> manifest name/version -> signature -> owner pinning.
+	ks := newKnownStore(e, stderr)
+	rec, recorded := ks.get(e.registry, owner, name)
+	sum := sha256.Sum256(tarball)
+	sig, ok := e.checkSignature(sigStage{cmd: "pull", stderr: stderr, owner: owner, name: name, res: res,
+		digest: sum, m: m, rec: rec, recorded: recorded, flags: fl})
+	if !ok {
+		return 1
+	}
+	pin, ok := ks.gateOwner("pull", stderr, e.registry, owner, name, sig.ownerID(res.OwnerID), fl.acceptNewOwner)
+	if !ok {
+		return 1
+	}
 	os.Remove(dest) // succeeds only for an empty directory, which is allowed
 	if err := os.Rename(tmp, dest); err != nil {
 		fmt.Fprintf(stderr, "capm pull: %v\n", err)
 		return 1
 	}
 	os.Chmod(dest, 0o755)
-	if pin.state == pinNew || pin.state == pinChanged {
-		if err := ks.update(e.registry, owner, name, func(r *knownRecord) { setPin(r, pin) }); err != nil {
+	if pin.state == pinNew || pin.state == pinChanged || sig.verified {
+		if err := ks.update(e.registry, owner, name, func(r *knownRecord) {
+			setPin(r, pin)
+			sig.record(r, res.Version)
+		}); err != nil {
 			fmt.Fprintf(stderr, "warning: could not save %s: %v\n", knownFileName, err)
 		}
 	}

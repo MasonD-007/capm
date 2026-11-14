@@ -85,9 +85,10 @@ func (k *knownStore) compareLastRun(stderr io.Writer, registry, owner, name stri
 }
 
 // recordRun stores the owner pin and the run just authorised.
-func (k *knownStore) recordRun(stderr io.Writer, registry, owner, name string, pin pinInfo, res client.Resolved, m *manifest.Manifest) {
+func (k *knownStore) recordRun(stderr io.Writer, registry, owner, name string, pin pinInfo, sig sigOutcome, res client.Resolved, m *manifest.Manifest) {
 	err := k.update(registry, owner, name, func(r *knownRecord) {
 		setPin(r, pin)
+		sig.record(r, res.Version)
 		r.LastRun = &lastRun{Version: res.Version, Digest: res.Digest, Manifest: m, At: time.Now().UTC()}
 	})
 	if err != nil {

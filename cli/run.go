@@ -31,6 +31,11 @@ type env struct {
 
 	upd updateEnv // self-update and the update notice (updatecheck.go)
 
+	// verify replaces sigverify.Verify. Only unit tests set it; nil means the
+	// real verifier, and there is no way to set it from the command line or
+	// environment (see sigcheck.go).
+	verify verifyFunc
+
 	// actionsHosts, when set, replaces the GitHub Actions host check of
 	// `capm login --oidc`. Only unit tests set it; there is no way to set it
 	// from the command line or environment (see testActionsHosts).
@@ -68,7 +73,7 @@ Commands:
   init      Create a commented capm.yaml (and a starter prompt) in a new bundle directory
   lint      Check a bundle directory for problems before publishing; "--strict" makes warnings fail
   push      Package and publish an agent to a registry
-  pull      Download a bundle and check it against the registry's sha256 digest (bundles are not signed)
+  pull      Download a bundle, check its sha256 digest and, when it is signed, its signer
   inspect   Show the bundle's declared permissions (not enforced; see the egress line);
             with --diff [oldversion], show what changed since the version you last ran
   run       Launch an agent in a Docker Sandbox (sbx)
@@ -83,6 +88,7 @@ Commands:
 
 capm run [--yes] [--workdir DIR] [--model-url URL] [--model-key KEY] [--model NAME]
          [--allow-unenforced-egress] [--allow-global-anthropic-secret] [--accept-new-owner]
+         [--accept-new-signer]
          [--accept-permission-changes] [--accept-changed-digest] <dir | user/name[@version]>
   Shows the declared permissions and run plan, asks to confirm (--yes skips),
   then runs the agent with sbx. Mount paths are relative to --workdir
@@ -102,6 +108,12 @@ capm run [--yes] [--workdir DIR] [--model-url URL] [--model-key KEY] [--model NA
   not skip the confirmation: non-interactive runs need --accept-permission-changes.
   The same version served with different bytes is refused unless
   --accept-changed-digest is given.
+  A registry bundle's signer is checked before the plan is shown. Most bundles
+  are not signed; that is said plainly and allowed. A bundle that claims to be
+  signed but cannot be checked is refused (--yes does not override that, and the
+  refusal names the one flag that does). Which repository signs a bundle is
+  pinned like its owner; a different one is refused unless --accept-new-signer
+  is given. See docs/security-notes.md.
 
 capm report <user/name[@version]> --reason malware|secrets-exposed|impersonation|other [--details TEXT]
   Sends an abuse report to the registry operator, who reviews it by hand. It
@@ -142,9 +154,14 @@ capm login --oidc [--audience URL]
   CAPM_TOKEN=$(capm login --oidc). Nothing is stored. The audience defaults to
   the registry URL.
 
-capm pull [--accept-new-owner] user/name[@version]
+capm pull [--accept-new-owner] [--accept-new-signer] user/name[@version]
   Downloads the bundle into ./name/ after checking its digest, and remembers
   the owner's account id the same way. --accept-new-owner accepts a changed owner.
+  It also checks who signed the bundle, when it is signed, and says on one
+  line what was and was not proven; --accept-new-signer is as for
+  capm run. capm inspect prints the same kind of line for a registry bundle but
+  does not download it, so it can only say the signer matches the digest the
+  registry reports.
 
 capm list [owner] [--sort name|recent|downloads] / capm search <text> [--sort name|recent|downloads]
   --sort recent orders by the newest version's date and adds a YYYY-MM-DD

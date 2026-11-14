@@ -82,6 +82,12 @@ sha256 digest the registry reports, which protects against corruption in
 transit, not against a malicious or compromised registry. The only publisher
 identity is the GitHub login in the bundle name (`login/name`).
 
+The registry can now store one signature (a Sigstore bundle) per version, which
+an authorised publisher uploads from CI; it is write-once, and the registry
+only stores and serves it. It does not verify it and its word is not trusted:
+a version marked `signed` only means a signature file exists. Verification
+happens in the CLI, which is not wired up yet.
+
 ## Login reassignment
 
 The registry keys owners by GitHub numeric ID, but bundle names use the

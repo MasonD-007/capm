@@ -7,11 +7,12 @@ GitHub Actions workflow, using Sigstore keyless signatures.
 id, err := sigverify.Verify(sigBundle, sha256OfTarball, sigverify.Expect{OwnerLogin: "acme"})
 ```
 
-**Status: nothing calls this yet.** It is step 1 of bundle signing (see
-`docs/signing-findings.md` on the `spike/signing` branch, sections 3, 6 and 8).
-There is no user-visible change, no `main`-package import, and the shipped CLI
-binary is byte-for-byte the same size as before. User docs
-(`docs/security-notes.md`, "No signing") are deliberately unchanged.
+**Status: called by `capm pull`, `capm run` and `capm inspect`** (`cli/sigcheck.go`,
+step 3 of bundle signing; see `docs/signing-findings.md` on the `spike/signing`
+branch, sections 3, 6 and 8). The package itself is unchanged since step 1; the
+shipped CLI binary now links it (about 19-20.5 MB, see "Size budget"). User docs
+are in `docs/security-notes.md` ("Signatures"). The "Size budget" table below
+records the numbers measured before this step.
 
 ## What a successful `Verify` guarantees
 
@@ -41,7 +42,7 @@ or left empty if it is informational (`SourceSHA`, `RunURL`). Free-text fields
 - **Not "this is the version you asked for".** The signature covers bytes, not
   `owner/name@version`. A caller must compare the manifest inside the verified
   tarball (name, version) with what it requested, or an old signed tarball can be
-  replayed under a new label. (The spike found `pull` and `run` do not do this
+  replayed under a new label. (`pull` and `run` do this since step 3; the spike found they did not.)
   today.)
 - **Not a particular workflow, branch or reviewer.** It proves some workflow run
   in the named repository signed the digest. Anyone who can run a workflow there
@@ -248,31 +249,31 @@ script/Homebrew formula; that changes the release workflow, so it is its own PR.
 
 ## What later steps must do
 
-1. **Pin ids.** After the first successful `Verify` for `registry+owner/name`,
+1. **Pin ids. DONE (step 3, `cli/sigcheck.go`; id pins in `known.json`).** After the first successful `Verify` for `registry+owner/name`,
    store `Identity.OwnerID` (the `ownerId` field already in `known.json`) and
    `Identity.RepositoryID`, and pass them back in `Expect` on later runs. Refuse
    when they differ; refuse when the registry's reported owner id disagrees with
    the certificate's. Treat a changed repository id as an escalation, not a
    warning. (Confirm the registry's `ownerId` and the certificate's
    `repository_owner_id` are the same id space; unverified.)
-2. **Check the manifest.** Compare the manifest inside the verified tarball
+2. **Check the manifest. DONE (step 3: name and version in `checkBundleIdentity` for every registry download; repository passed as `Expect.Repository` when it belongs to the bundle owner).** Compare the manifest inside the verified tarball
    (name, version) with what `pull`/`run` asked for, and the manifest's
    repository (if it names one) with `Expect.Repository`. The signature binds
    only bytes.
-3. **Use the CLI's own digest.** Pass the SHA-256 of the tarball bytes the CLI
+3. **Use the CLI's own digest. DONE (step 3; inspect, which downloads nothing, uses the registry's digest and says so).** Pass the SHA-256 of the tarball bytes the CLI
    downloaded (`cmd_pull.go` already computes it as `sha256:<hex>`; strip the
    prefix and decode), not the registry's reported digest.
-4. **Map errors.** `ErrStaleTrustRoot` to "update capm"; `ErrIdentity` shows
+4. **Map errors. DONE (step 3).** `ErrStaleTrustRoot` to "update capm"; `ErrIdentity` shows
    `Field`; `ErrUntrusted`/`ErrMalformed` are hard errors for a bundle that
    *has* a signature. A bundle with no signature is a separate, earlier decision
    (owner decision: no downgrade refusal; the CLI may say an earlier version was
    signed).
-5. **Privacy notice.** Signing writes the repository, owner id, workflow path,
+5. **Privacy notice. NOT DONE (belongs to signing, step 4).** Signing writes the repository, owner id, workflow path,
    ref, commit SHA and Actions run URL to the public Rekor log permanently, for
    private repositories too. The publisher must be told before the first
    signature (opt-in signing).
-6. **Keep the root fresh.** Merge the weekly refresh PR and ship it; add the scheduled
+6. **Keep the root fresh. NOT DONE.** Merge the weekly refresh PR and ship it; add the scheduled
    check designed above.
-7. **Add a real fixture.** After the first real CI signing add a message-signature
+7. **Add a real fixture. NOT DONE (the CLI path is tested with a fake verifier and with the real verifier refusing the only real fixture; no acceptable real signature has gone through it).** After the first real CI signing add a message-signature
    bundle with an Actions certificate and a test for the exported `Verify`
    accept path.

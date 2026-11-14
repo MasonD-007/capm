@@ -163,7 +163,7 @@ capm search reviewer               # bundles whose owner, name or description co
 capm list alice                    # alice's bundles; without an owner, every bundle
 capm list --sort downloads         # most downloaded in the last 30 days first (also: recent, name; works on search too)
 capm inspect alice/pr-reviewer@0.1.0   # declared permissions, without installing
-capm pull alice/pr-reviewer@0.1.0  # unpacks into ./pr-reviewer after checking the sha256 digest
+capm pull alice/pr-reviewer@0.1.0  # unpacks into ./pr-reviewer after checking the sha256 digest and any signature
 capm run alice/pr-reviewer@0.1.0 --model-url https://models.example.com --allow-unenforced-egress
 capm inspect alice/pr-reviewer@0.2.0 --diff   # what changed since the version you last ran
 capm outdated                      # bundles you have run that have a newer version, and what it changes
@@ -207,6 +207,29 @@ manifest and describe what the bundle declares it can reach (read-write
 mounts, many egress hosts, secrets, MCP servers, context files); they are not
 a review, and no labels is not an endorsement. See "What the risk labels mean"
 in the security notes for every rule.
+
+**The `signature:` line.** `pull`, `run` and `inspect` of a registry bundle print
+one line on stderr about its signature (before the confirmation, for `run`):
+
+- `signature: none (this version is unsigned; its publisher is identified only
+  by the registry)`: the usual case today. Nothing was checked, and nothing is
+  wrong: signing is optional and only happens in CI. If a version you used
+  earlier was signed, a second `signature: note:` line says so; it never blocks.
+- `signature: verified — signed by a GitHub Actions workflow in owner/repo
+  (workflow@ref, commit abc1234)`: a signature was checked offline against the
+  exact bytes downloaded. It proves which repository's workflow signed them, not
+  that they are safe; see "Signatures" in the security notes. The first time, the
+  signing repository is pinned in `known.json`.
+- `capm inspect` does not download the bundle, so it prints `signature: valid for
+  the digest the registry reports (...); the bundle itself was not downloaded,
+  ...` instead, never "verified".
+- Anything else is a refusal that names the broad reason: the signature does not
+  verify, cannot be fetched, the signer repository or owner changed, or your capm
+  is too old to check it (`capm self-update`). `--yes` does not bypass it.
+  `--accept-new-signer` accepts a changed signing repository (and re-pins);
+  `--allow-invalid-signature` continues as if the version were unsigned, with a
+  warning, and records nothing as signed. Both exist on `pull` and `run`; there
+  is no environment-variable form.
 
 `capm run` shows the declared permissions and its run plan, asks you to
 confirm (`--yes` skips the question), then drives sbx. Today it always needs
@@ -402,6 +425,11 @@ manifest of the last run you confirmed. Nothing is written when you only
   same `owner/name`, `run` and `pull` refuse; `--accept-new-owner` proceeds and
   pins the new id. Registries that do not send an owner id get a warning, not a
   pin.
+- **Signer pinning.** After capm verifies a signed version it also remembers
+  the signing repository (its id and name, and the version) under `signerPin`.
+  A later signed version from a different repository is refused unless you pass
+  `--accept-new-signer`. `capm known` shows it in a `SIGNER` column. An unsigned
+  later version is not refused.
 - **Permission diff.** Running a different version than last time first shows
   `Changes since the version you last ran (X -> Y)` with `+` added, `-` removed
   and `~` changed lines (egress, mounts, secrets, MCP servers, base agent,
@@ -412,7 +440,9 @@ manifest of the last run you confirmed. Nothing is written when you only
 - **`capm outdated`.** Lists, from the same file, the bundles you have run on
   this registry whose latest installable version differs from the one you ran:
   `owner/name  ran  latest  changes`, where changes is e.g. `adds 2 egress
-  hosts, 1 secret; widens 1 mount` or `no permission changes`. It only asks the
+  hosts, 1 secret; widens 1 mount` or `no permission changes`. When the registry
+  reports signatures a `signed (registry's claim)` column says `signed` or
+  `unsigned` for the latest version; capm has not checked it. It only asks the
   registry (metadata, never the bundle), runs nothing and writes nothing.
   Bundles that were removed, are gone, changed owner or could not be reached get
   a row saying so. With nothing recorded it says so; when all are current it
